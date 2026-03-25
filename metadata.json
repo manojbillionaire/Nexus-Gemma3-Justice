@@ -1,0 +1,5 @@
+{
+  "name": "Nexus Voice",
+  "description": "A real-time AI voice assistant powered by Gemini Live for seamless, low-latency conversations.",
+  "requestFramePermissions": ["microphone"]
+}
