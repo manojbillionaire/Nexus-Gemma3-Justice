@@ -105,6 +105,42 @@ const S = {
   card: { background: 'rgba(10,15,29,0.7)', borderRadius: 24, padding: 24, border: '1px solid rgba(255,255,255,.05)', backdropFilter: 'blur(10px)' },
 };
 
+const NeuralFlow = () => (
+  <div className="absolute inset-0 overflow-hidden pointer-events-none opacity-20 z-0">
+    <div className="absolute inset-0 bg-gradient-to-br from-indigo-500/10 via-transparent to-amber-500/10" />
+    <svg className="absolute w-full h-full" viewBox="0 0 1000 1000" preserveAspectRatio="none">
+      <motion.path
+        d="M0,500 Q250,400 500,500 T1000,500"
+        stroke="rgba(99, 102, 241, 0.2)"
+        strokeWidth="2"
+        fill="none"
+        animate={{
+          d: [
+            "M0,500 Q250,400 500,500 T1000,500",
+            "M0,500 Q250,600 500,500 T1000,500",
+            "M0,500 Q250,400 500,500 T1000,500"
+          ]
+        }}
+        transition={{ duration: 10, repeat: Infinity, ease: "easeInOut" }}
+      />
+      <motion.path
+        d="M0,600 Q250,500 500,600 T1000,600"
+        stroke="rgba(245, 158, 11, 0.1)"
+        strokeWidth="1"
+        fill="none"
+        animate={{
+          d: [
+            "M0,600 Q250,500 500,600 T1000,600",
+            "M0,600 Q250,700 500,600 T1000,600",
+            "M0,600 Q250,500 500,600 T1000,600"
+          ]
+        }}
+        transition={{ duration: 15, repeat: Infinity, ease: "easeInOut", delay: 2 }}
+      />
+    </svg>
+  </div>
+);
+
 export default function AdvocatePortal({ onBack }: { onBack: () => void }) {
   const [view, setView] = useState("command");
   const [aiStatus, setAiStatus] = useState<any>({});
@@ -550,6 +586,7 @@ export default function AdvocatePortal({ onBack }: { onBack: () => void }) {
         </div>
 
         <main style={{ flex: 1, overflow: 'hidden', position: 'relative', background: '#020617' }}>
+          <NeuralFlow />
           <AnimatePresence mode="wait">
             {view === 'command' && (
               <motion.div key="command" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} style={{ height: '100%', display: 'flex', flexDirection: 'column', padding: 24, gap: 24, overflow: 'hidden' }}>
@@ -1125,7 +1162,7 @@ export default function AdvocatePortal({ onBack }: { onBack: () => void }) {
                   </div>
                   <div className="flex items-center gap-6 bg-white/5 border border-white/10 rounded-2xl px-6 py-4">
                     <div className="flex items-center gap-3 pr-6 border-r border-white/10">
-                      <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Auto-Answer</span>
+                      <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Enable auto answering?</span>
                       <button onClick={() => setAutoAnswerEnabled(!autoAnswerEnabled)} className={`w-10 h-5 rounded-full relative transition-all ${autoAnswerEnabled ? 'bg-indigo-500' : 'bg-slate-800'}`}>
                         <div className={`absolute top-0.5 w-4 h-4 bg-white rounded-full transition-all ${autoAnswerEnabled ? 'right-0.5' : 'left-0.5'}`} />
                       </button>

@@ -1,10 +1,48 @@
 import { useState, useEffect } from 'react';
 import api from '../api.js';
 
+import { motion } from 'motion/react';
+
 const Icon = ({ path, size = 20, strokeWidth = 2 }) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
     {Array.isArray(path) ? path.map((d, i) => <path key={i} d={d} />) : <path d={path} />}
   </svg>
+);
+
+const NeuralFlow = () => (
+  <div className="absolute inset-0 overflow-hidden pointer-events-none opacity-20 z-0">
+    <div className="absolute inset-0 bg-gradient-to-br from-indigo-500/10 via-transparent to-amber-500/10" />
+    <svg className="absolute w-full h-full" viewBox="0 0 1000 1000" preserveAspectRatio="none">
+      <motion.path
+        d="M0,500 Q250,400 500,500 T1000,500"
+        stroke="rgba(99, 102, 241, 0.2)"
+        strokeWidth="2"
+        fill="none"
+        animate={{
+          d: [
+            "M0,500 Q250,400 500,500 T1000,500",
+            "M0,500 Q250,600 500,500 T1000,500",
+            "M0,500 Q250,400 500,500 T1000,500"
+          ]
+        }}
+        transition={{ duration: 10, repeat: Infinity, ease: "easeInOut" }}
+      />
+      <motion.path
+        d="M0,600 Q250,500 500,600 T1000,600"
+        stroke="rgba(245, 158, 11, 0.1)"
+        strokeWidth="1"
+        fill="none"
+        animate={{
+          d: [
+            "M0,600 Q250,500 500,600 T1000,600",
+            "M0,600 Q250,700 500,600 T1000,600",
+            "M0,600 Q250,500 500,600 T1000,600"
+          ]
+        }}
+        transition={{ duration: 15, repeat: Infinity, ease: "easeInOut", delay: 2 }}
+      />
+    </svg>
+  </div>
 );
 
 export default function AgencyHQPortal({ user, onLogout }) {
@@ -167,7 +205,7 @@ export default function AgencyHQPortal({ user, onLogout }) {
   const S = {
     page: { display:'flex', height:'100vh', background:'#020617', color:'#e2e8f0', fontFamily:"'Inter',system-ui,sans-serif", overflow:'hidden', fontSize:14 } as const,
     sidebar: { width:220, background:'#070b14', borderRight:'1px solid rgba(255,255,255,.05)', display:'flex', flexDirection:'column' as const, padding:'20px 0', flexShrink:0 } as const,
-    main: { flex:1, display:'flex', flexDirection:'column' as const, overflow:'hidden' } as const,
+    main: { flex:1, display:'flex', flexDirection:'column' as const, overflow:'hidden', position: 'relative' } as const,
     header: { height:54, background:'#0a0f1d', borderBottom:'1px solid rgba(255,255,255,.05)', display:'flex', alignItems:'center', padding:'0 24px', justifyContent:'space-between', flexShrink:0 } as const,
     content: { flex:1, overflowY:'auto' as const, padding:24 } as const,
     card: { background:'#0a0f1d', borderRadius:20, padding:22, border:'1px solid rgba(255,255,255,.05)' } as const,
@@ -221,6 +259,7 @@ export default function AgencyHQPortal({ user, onLogout }) {
       </div>
 
       <div style={S.main}>
+        <NeuralFlow />
         <header style={S.header}>
           <div style={{ fontSize:13, fontWeight:900, color:'#e2e8f0' }}>Nexus Justice <span style={{ color:'#f59e0b' }}>Agency HQ</span></div>
           <div style={{ display:'flex', alignItems:'center', gap:10 }}>

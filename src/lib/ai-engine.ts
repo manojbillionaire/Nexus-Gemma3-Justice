@@ -19,7 +19,13 @@ export class HybridAIEngine {
   private ai: any;
 
   private constructor() {
-    this.ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (apiKey) {
+      this.ai = new GoogleGenAI({ apiKey });
+    } else {
+      console.warn("GEMINI_API_KEY is not defined. AI features will be disabled.");
+      this.ai = null;
+    }
   }
 
   public static getInstance(): HybridAIEngine {
@@ -31,7 +37,7 @@ export class HybridAIEngine {
 
   public getStatus() {
     return {
-      builtIn: true,
+      builtIn: !!this.ai,
       voiceModel: 'gemma-3-1b-it',
       draftModel: 'sarvam-30b',
       searchModel: 'gemini-2.5-flash-lite'
@@ -44,6 +50,9 @@ export class HybridAIEngine {
     imageBase64?: string,
     task: AITaskType = 'general'
   ): Promise<string> {
+    if (!this.ai) {
+      return "Error: AI engine not initialized. Please check your API key configuration.";
+    }
     try {
       // If task is 'general', let Gemma 3 1B-IT orchestrate/route the request
       let effectiveTask = task;
