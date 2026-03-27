@@ -12,7 +12,6 @@ api.interceptors.request.use((config) => {
   if (config.url === '/api/agency/advocates') {
     config.adapter = async () => ({
       data: [
-        { _id: '1', name: 'Sreedharan K.', email: 'sreedharan@example.com', phone: '+91 9876543210', barCouncilNo: 'K/123/1994', specialisation: 'Property', plan: 'Elite', status: 'active', joinedAt: '2026-01-10' },
         { _id: '2', name: 'Elena Rodriguez', email: 'elena@example.com', phone: '+1 555-0199', barCouncilNo: 'NY/9988/2010', specialisation: 'Cooperative', plan: 'Pro', status: 'active', joinedAt: '2026-02-15' }
       ],
       status: 200,
@@ -25,7 +24,6 @@ api.interceptors.request.use((config) => {
   if (config.url === '/api/agency/subscriptions') {
     config.adapter = async () => ({
       data: [
-        { _id: '1', name: 'Sreedharan K.', email: 'sreedharan@example.com', plan: 'Elite', computedStatus: 'active', daysLeft: 25, paymentHistory: [{ paidAt: '2026-03-01', amount: 2500 }] },
         { _id: '2', name: 'Elena Rodriguez', email: 'elena@example.com', plan: 'Pro', computedStatus: 'active', daysLeft: 12, paymentHistory: [{ paidAt: '2026-03-10', amount: 1500 }] }
       ],
       status: 200,
@@ -37,9 +35,7 @@ api.interceptors.request.use((config) => {
 
   if (config.url === '/api/agency/pending') {
     config.adapter = async () => ({
-      data: [
-        { _id: '3', name: 'Raju Varma', email: 'raju@example.com', phone: '+91 9447001122', barCouncilNo: 'K/456/2005', specialisation: 'Criminal', joinedAt: '2026-03-24' }
-      ],
+      data: [],
       status: 200,
       statusText: 'OK',
       headers: {},

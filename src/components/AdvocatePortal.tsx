@@ -27,17 +27,16 @@ const Icon = ({ path, size = 20, strokeWidth = 2, style }: any) => (
 const SIMULATED_CALLS = [
   {
     id: 1,
-    clientName: "Sreedharan K.",
-    phone: "+91 9876543210",
+    clientName: "John Doe",
+    phone: "+1 555-0123",
     timestamp: "2026-03-24 10:30 AM",
-    duration: "4m 12s",
+    duration: "5m 12s",
     transcript: [
-      { role: "client", text: "Hello Advocate, I am calling about the property dispute in Aluva. My neighbor Rajan has started building a fence that encroaches about 2 cents into my land." },
-      { role: "advocate", text: "I see. Do you have the title deeds and the survey map ready?" },
-      { role: "client", text: "Yes, I have them. He claims it's his land based on some old document, but my registered sale deed from 1994 clearly shows the boundaries." },
-      { role: "advocate", text: "We might need to file for an interim injunction. I will check the legal sections and get back to you." }
+      { role: "client", text: "Hello Advocate, I have a property dispute with my brother over our ancestral land in the village." },
+      { role: "advocate", text: "I understand. Do you have the title deeds and the family tree document?" },
+      { role: "client", text: "Yes, I have all the documents ready." }
     ],
-    summary: "Property encroachment dispute in Aluva. Neighbor Rajan building illegal fence. Client has 1994 sale deed."
+    summary: "Property dispute over ancestral land. Needs to file a partition suit. Documents ready."
   },
   {
     id: 2,
@@ -53,11 +52,15 @@ const SIMULATED_CALLS = [
   },
   {
     id: 3,
-    clientName: "Raju Varma",
-    phone: "+91 9447001122",
+    clientName: "Sarah Smith",
+    phone: "+1 555-0456",
     timestamp: "2026-03-22 11:00 AM",
-    duration: "5m 10s",
-    summary: "Consultation regarding tenant eviction notice. Lease expired 3 months ago."
+    duration: "3m 20s",
+    transcript: [
+      { role: "client", text: "I'm starting a new job and I want you to review the employment contract, especially the non-compete clause." },
+      { role: "advocate", text: "Sure, send it over. I'll check if the clause is reasonable and enforceable in your jurisdiction." }
+    ],
+    summary: "Employment contract review. Non-compete clause concerns. Needs legal opinion."
   }
 ];
 
@@ -410,6 +413,73 @@ export default function AdvocatePortal({ onBack }: { onBack: () => void }) {
   const [selectedCall, setSelectedCall] = useState<any>(null);
   const [callViewTab, setCallViewTab] = useState<'log' | 'transcript'>('log');
 
+  // Gemma3n Download State
+  const [downloadProgress, setDownloadProgress] = useState(0);
+  const [isDownloading, setIsDownloading] = useState(false);
+  const [downloadSlice, setDownloadSlice] = useState(0); // 0: none, 1: day 1, 2: day 2
+  const [connectionType, setConnectionType] = useState<'wifi' | 'mobile' | 'unknown'>('unknown');
+  const [downloadMessage, setDownloadMessage] = useState('');
+
+  useEffect(() => {
+    // Check connection type if supported
+    const conn = (navigator as any).connection || (navigator as any).mozConnection || (navigator as any).webkitConnection;
+    if (conn) {
+      const updateConnection = () => {
+        if (conn.type === 'wifi') setConnectionType('wifi');
+        else if (conn.type === 'cellular') setConnectionType('mobile');
+        else setConnectionType('unknown');
+      };
+      conn.addEventListener('change', updateConnection);
+      updateConnection();
+      return () => conn.removeEventListener('change', updateConnection);
+    }
+  }, []);
+
+  const handleDownloadGemma3n = async () => {
+    setIsDownloading(true);
+    setDownloadProgress(0);
+    setDownloadMessage("Checking connection...");
+
+    // Simulate connection check delay
+    await new Promise(r => setTimeout(r, 1000));
+
+    const isWifi = connectionType === 'wifi' || !connectionType; // Assume wifi if unknown for simulation
+    const isMobile = connectionType === 'mobile';
+
+    if (isWifi) {
+      setDownloadMessage("Wi-Fi detected. Downloading Gemma3n completely...");
+      for (let i = 0; i <= 100; i += 5) {
+        setDownloadProgress(i);
+        await new Promise(r => setTimeout(r, 200));
+      }
+      setDownloadMessage("Gemma3n downloaded successfully!");
+      setDownloadSlice(2); // Fully downloaded
+    } else if (isMobile) {
+      setDownloadMessage("Mobile data detected. Splitting download into 2 slices (Day 1/2)...");
+      await new Promise(r => setTimeout(r, 1500));
+      
+      if (downloadSlice === 0) {
+        setDownloadMessage("Downloading Slice 1 (Day 1)...");
+        for (let i = 0; i <= 50; i += 5) {
+          setDownloadProgress(i);
+          await new Promise(r => setTimeout(r, 300));
+        }
+        setDownloadSlice(1);
+        setDownloadMessage("Slice 1 complete. Daily limit reached. Please resume tomorrow for Slice 2.");
+      } else if (downloadSlice === 1) {
+        setDownloadMessage("Resuming Download: Slice 2 (Day 2)...");
+        for (let i = 50; i <= 100; i += 5) {
+          setDownloadProgress(i);
+          await new Promise(r => setTimeout(r, 300));
+        }
+        setDownloadSlice(2);
+        setDownloadMessage("Gemma3n downloaded successfully (Day 2 complete)!");
+      }
+    }
+    
+    setIsDownloading(false);
+  };
+
   useEffect(() => {
     const init = async () => {
       await localDB.init();
@@ -418,7 +488,7 @@ export default function AdvocatePortal({ onBack }: { onBack: () => void }) {
         setClients(savedClients);
       } else {
         const initial = [
-          { id: 1, name: 'Sreedharan K.', phone: '+91 9876543210', court: 'District Court, Aluva', case_number: 'OS 145/2025', next_date: '2026-03-15', purpose: 'Filing Written Statement' },
+          { id: 1, name: 'Elena Rodriguez', phone: '+1 555-0199', court: 'District Court, Aluva', case_number: 'OS 145/2025', next_date: '2026-03-15', purpose: 'Filing Written Statement' },
         ];
         initial.forEach(c => {
           localDB.run("INSERT INTO clients (name, phone, case_number, court, next_date, purpose) VALUES (?, ?, ?, ?, ?, ?)", 
@@ -463,8 +533,8 @@ export default function AdvocatePortal({ onBack }: { onBack: () => void }) {
   const simulateIncomingCall = () => {
     setIncomingCall({
       id: Date.now(),
-      clientName: "Raju Varma",
-      phone: "+91 9447001122",
+      clientName: "Elena Rodriguez",
+      phone: "+1 555-0199",
       timestamp: new Date().toLocaleString(),
       duration: "0s",
       transcript: [],
@@ -676,6 +746,53 @@ export default function AdvocatePortal({ onBack }: { onBack: () => void }) {
                         </div>
                       </div>
 
+                      {/* Gemma3n Model Management */}
+                      <div className="bg-white/5 border border-white/5 rounded-3xl p-6 mb-6">
+                        <div className="flex justify-between items-center mb-4">
+                          <div className="text-[10px] font-black text-indigo-400 tracking-widest uppercase">Model Management</div>
+                          <div className="flex items-center gap-2">
+                            <span className="text-[10px] text-slate-500 font-bold">{connectionType === 'wifi' ? 'Wi-Fi' : connectionType === 'mobile' ? 'Mobile Data' : 'Unknown'}</span>
+                            <div className={`w-2 h-2 rounded-full ${connectionType === 'wifi' ? 'bg-emerald-500' : 'bg-amber-500'}`} />
+                          </div>
+                        </div>
+
+                        <div className="space-y-4">
+                          <div className="flex items-center justify-between">
+                            <div className="text-xs font-bold text-slate-200">Gemma3n</div>
+                            <div className="text-[10px] text-slate-500 font-medium">
+                              {downloadSlice === 2 ? 'Downloaded' : downloadSlice === 1 ? 'Slice 1 Complete' : 'Not Downloaded'}
+                            </div>
+                          </div>
+
+                          {(isDownloading || (downloadProgress > 0 && downloadProgress < 100)) && (
+                            <div className="space-y-2">
+                              <div className="h-1.5 w-full bg-white/5 rounded-full overflow-hidden">
+                                <motion.div 
+                                  className="h-full bg-indigo-500"
+                                  initial={{ width: 0 }}
+                                  animate={{ width: `${downloadProgress}%` }}
+                                />
+                              </div>
+                              <div className="text-[9px] text-slate-400 italic">{downloadMessage}</div>
+                            </div>
+                          )}
+
+                          {downloadMessage && !isDownloading && (downloadProgress === 0 || downloadProgress === 100) && (
+                            <div className="text-[9px] text-slate-400 italic">{downloadMessage}</div>
+                          )}
+
+                          {downloadSlice < 2 && (
+                            <button 
+                              onClick={handleDownloadGemma3n}
+                              disabled={isDownloading}
+                              className="w-full py-3 bg-indigo-500/10 hover:bg-indigo-500/20 border border-indigo-500/30 text-indigo-400 rounded-xl font-black text-[10px] uppercase tracking-widest transition-all"
+                            >
+                              {isDownloading ? 'Downloading...' : downloadSlice === 1 ? 'Resume Day 2 Download' : 'Download Gemma3n'}
+                            </button>
+                          )}
+                        </div>
+                      </div>
+
                       <div className="flex items-end gap-1.5 h-12 mb-6">
                         {[0.4, 0.7, 0.3, 0.9, 0.5, 0.8, 0.4, 0.6, 0.3, 0.7, 0.5, 0.9, 0.4, 0.6, 0.3, 0.8, 0.5, 0.7].map((h, i) => (
                           <div key={i} className="flex-1 bg-amber-500/80 rounded-full" style={{ height: `${h * 100}%` }} />
@@ -689,63 +806,64 @@ export default function AdvocatePortal({ onBack }: { onBack: () => void }) {
                   {/* Right Column */}
                   <div className="flex-1 flex flex-col gap-6 overflow-hidden">
                     <div style={S.card} className="flex-1 flex flex-col overflow-hidden p-0">
-                      <div className="flex border-b border-white/5">
-                        <button onClick={() => setCallViewTab('log')} className={`px-12 py-4 text-[10px] font-black uppercase tracking-widest relative ${callViewTab === 'log' ? 'text-amber-500' : 'text-slate-500'}`}>
-                          CALL LOGS
-                          {callViewTab === 'log' && <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-amber-500" />}
-                        </button>
-                        <button onClick={() => setCallViewTab('transcript')} disabled={!selectedCall} className={`px-12 py-4 text-[10px] font-black uppercase tracking-widest relative ${callViewTab === 'transcript' ? 'text-amber-500' : 'text-slate-500 opacity-30'}`}>
-                          TRANSCRIPT
-                          {callViewTab === 'transcript' && <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-amber-500" />}
-                        </button>
+                      <div className="px-6 py-4 border-b border-white/5 flex justify-between items-center">
+                        <div className="text-[10px] font-black text-amber-500 tracking-widest uppercase">CALL LOGS & TRANSCRIPTS</div>
+                        <div className="text-[10px] font-black text-slate-500 uppercase">{SIMULATED_CALLS.length} CALLS RECORDED</div>
                       </div>
                       
                       <div className="flex-1 overflow-y-auto p-6 space-y-4">
-                        {callViewTab === 'log' ? (
-                          SIMULATED_CALLS.map(call => (
-                            <div key={call.id} onClick={() => { setSelectedCall(call); setCallViewTab('transcript'); }} className="p-5 bg-white/5 border border-white/5 rounded-3xl cursor-pointer hover:bg-white/10 transition-all group">
-                              <div className="flex items-start gap-4">
-                                <div className="w-12 h-12 bg-indigo-500/10 border border-indigo-500/20 rounded-xl flex items-center justify-center text-indigo-400">
-                                  <Users size={20} />
-                                </div>
-                                <div className="flex-1">
-                                  <div className="flex justify-between items-center mb-1">
-                                    <div className="font-black text-slate-200">{call.clientName}</div>
-                                    <div className="text-[10px] font-black text-slate-500">{call.timestamp}</div>
-                                  </div>
-                                  <div className="text-xs text-slate-500 mb-3">{call.phone}</div>
-                                  <div className="text-xs text-slate-400 italic leading-relaxed">{call.summary}</div>
-                                </div>
-                                <div className="text-[10px] font-black text-slate-600 self-end">Duration: {call.duration}</div>
+                        {SIMULATED_CALLS.map(call => (
+                          <div 
+                            key={call.id} 
+                            onClick={() => setSelectedCall(selectedCall?.id === call.id ? null : call)} 
+                            className={`p-5 bg-white/5 border transition-all group rounded-3xl cursor-pointer ${
+                              selectedCall?.id === call.id ? 'border-amber-500/50 bg-white/10' : 'border-white/5 hover:bg-white/10'
+                            }`}
+                          >
+                            <div className="flex items-start gap-4">
+                              <div className={`w-12 h-12 rounded-xl flex items-center justify-center transition-all ${
+                                selectedCall?.id === call.id ? 'bg-amber-500 text-black' : 'bg-indigo-500/10 border border-indigo-500/20 text-indigo-400'
+                              }`}>
+                                <Users size={20} />
                               </div>
-                            </div>
-                          ))
-                        ) : (
-                          <div className="space-y-4">
-                            <div className="bg-black/20 p-6 rounded-3xl space-y-4 border border-white/5">
-                              {selectedCall.transcript?.map((t: any, i: number) => (
-                                <div key={i} className="space-y-1">
-                                  <div className={`text-[9px] font-black uppercase tracking-widest ${t.role === 'client' ? 'text-amber-500' : 'text-indigo-400'}`}>{t.role}</div>
-                                  <div className="text-sm text-slate-300 leading-relaxed">{t.text}</div>
+                              <div className="flex-1">
+                                <div className="flex justify-between items-center mb-1">
+                                  <div className="font-black text-slate-200">{call.clientName}</div>
+                                  <div className="text-[10px] font-black text-slate-500">{call.timestamp}</div>
                                 </div>
-                              ))}
+                                <div className="text-xs text-slate-500 mb-3">{call.phone}</div>
+                                <div className="text-xs text-slate-400 italic leading-relaxed">{call.summary}</div>
+                              </div>
+                              <div className="text-[10px] font-black text-slate-600 self-end">Duration: {call.duration}</div>
                             </div>
+
+                            <AnimatePresence>
+                              {selectedCall?.id === call.id && (
+                                <motion.div 
+                                  initial={{ height: 0, opacity: 0 }}
+                                  animate={{ height: 'auto', opacity: 1 }}
+                                  exit={{ height: 0, opacity: 0 }}
+                                  className="overflow-hidden"
+                                >
+                                  <div className="mt-6 pt-6 border-t border-white/5 space-y-4">
+                                    <div className="text-[9px] font-black text-indigo-400 tracking-widest uppercase mb-2">TRANSCRIPT</div>
+                                    <div className="bg-black/20 p-4 rounded-2xl space-y-4 border border-white/5">
+                                      {call.transcript?.map((t: any, i: number) => (
+                                        <div key={i} className="space-y-1">
+                                          <div className={`text-[9px] font-black uppercase tracking-widest ${t.role === 'client' ? 'text-amber-500' : 'text-indigo-400'}`}>{t.role}</div>
+                                          <div className="text-sm text-slate-300 leading-relaxed">{t.text}</div>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  </div>
+                                </motion.div>
+                              )}
+                            </AnimatePresence>
                           </div>
-                        )}
+                        ))}
                       </div>
                     </div>
                   </div>
-                </div>
-
-                {/* Bottom Stream */}
-                <div className="h-24 flex gap-4 overflow-x-auto pb-2 no-scrollbar">
-                  <div className="text-[10px] font-black text-slate-600 tracking-widest uppercase self-center rotate-180 [writing-mode:vertical-lr]">RECENT CALL STREAM</div>
-                  {SIMULATED_CALLS.map(call => (
-                    <div key={call.id} className="min-w-[240px] bg-white/5 border border-white/5 rounded-2xl p-4 flex flex-col justify-center">
-                      <div className="font-black text-slate-300 text-sm">{call.clientName}</div>
-                      <div className="text-[10px] font-black text-slate-600">{call.timestamp}</div>
-                    </div>
-                  ))}
                 </div>
               </motion.div>
             )}
@@ -896,7 +1014,7 @@ export default function AdvocatePortal({ onBack }: { onBack: () => void }) {
                 <div className="space-y-4">
                   {[
                     { title: 'System Update', message: 'Nexus Justice v3.1 is now live with hybrid AI capabilities.', time: '2 hours ago', type: 'info' },
-                    { title: 'New Case Assigned', message: 'You have a new case request from Sreedharan K.', time: '5 hours ago', type: 'case' },
+                    { title: 'New Case Assigned', message: 'You have a new case request from Elena Rodriguez.', time: '5 hours ago', type: 'case' },
                     { title: 'Subscription Renewal', message: 'Your Elite plan expires in 15 days.', time: '1 day ago', type: 'warning' },
                   ].map((n, i) => (
                     <div key={i} style={S.card} className="flex gap-4 items-start">

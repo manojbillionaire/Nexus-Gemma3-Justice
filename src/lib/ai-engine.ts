@@ -10,7 +10,7 @@ export type AITaskType = 'voice' | 'drafting' | 'search' | 'general';
 
 /**
  * HybridAIEngine implementation using multiple models.
- * Voice: Gemma 3 1B-IT
+ * Voice: Gemma3n
  * Drafting: Sarvam 30B
  * Web Search: Gemini 2.5 Flash Lite (with DuckDuckGo fallback)
  */
@@ -38,7 +38,7 @@ export class HybridAIEngine {
   public getStatus() {
     return {
       builtIn: !!this.ai,
-      voiceModel: 'gemma-3-1b-it',
+      voiceModel: 'Gemma3n',
       draftModel: 'sarvam-30b',
       searchModel: 'gemini-2.5-flash-lite'
     };
@@ -54,7 +54,7 @@ export class HybridAIEngine {
       return "Error: AI engine not initialized. Please check your API key configuration.";
     }
     try {
-      // If task is 'general', let Gemma 3 1B-IT orchestrate/route the request
+      // If task is 'general', let Gemma3n orchestrate/route the request
       let effectiveTask = task;
       if (task === 'general') {
         effectiveTask = await this.orchestrate(prompt);
@@ -70,7 +70,7 @@ export class HybridAIEngine {
         return this.callGeminiSearch(prompt, history);
       }
 
-      // 3. Voice/General Task -> Gemma 3 1B-IT (via Gemini API)
+      // 3. Voice/General Task -> Gemma3n (via Gemini API)
       const modelName = 'gemma-3-1b-it';
       
       const contents: any[] = history.map(m => ({
