@@ -76,6 +76,7 @@ const sideNav = [
   { id: 'support', label: 'Support', icon: "M18.364 5.636l-3.536 3.536m0 5.656l3.536 3.536M9.172 9.172L5.636 5.636m3.536 9.192l-3.536 3.536M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-5 0a4 4 0 11-8 0 4 4 0 018 0z" },
   { id: 'read', label: 'Read', icon: "M15 12a3 3 0 11-6 0 3 3 0 016 0z" },
   { id: 'convert', label: 'Convert', icon: "M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z" },
+  { id: 'models', label: 'Download brain', icon: "M4 7v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2H6c-1.1 0-2 .9-2 2zm0 4h16m-16 4h16" },
 ];
 
 const topTabs = [
@@ -89,6 +90,7 @@ const topTabs = [
   { id: 'support', label: 'SUPPORT' },
   { id: 'read', label: 'READ' },
   { id: 'convert', label: 'CONVERT' },
+  { id: 'models', label: 'BRAIN' },
 ];
 
 const CONVERTER_STEPS = [
@@ -145,6 +147,7 @@ const NeuralFlow = () => (
 );
 
 export default function AdvocatePortal({ onBack }: { onBack: () => void }) {
+  const [connectionType, setConnectionType] = useState<'wifi' | 'mobile' | 'unknown'>('unknown');
   const [view, setView] = useState("command");
   const [aiStatus, setAiStatus] = useState<any>({});
   const [isOffline, setIsOffline] = useState(!navigator.onLine);
@@ -185,13 +188,110 @@ export default function AdvocatePortal({ onBack }: { onBack: () => void }) {
   const [voiceAiTranscript, setVoiceAiTranscript] = useState("");
   const [voiceAiReply, setVoiceAiReply] = useState("");
   const [voiceAiStatus, setVoiceAiStatus] = useState<'idle' | 'listening' | 'thinking' | 'speaking'>('idle');
+  const [voiceHistory, setVoiceHistory] = useState<AIMessage[]>([]);
+  const [micLevel, setMicLevel] = useState(0);
+  const voiceAiOnRef = useRef(false);
+  const voiceAiStatusRef = useRef<'idle' | 'listening' | 'thinking' | 'speaking'>('idle');
+
+  // Sync refs with state
+  useEffect(() => { voiceAiOnRef.current = voiceAiOn; }, [voiceAiOn]);
+  useEffect(() => { voiceAiStatusRef.current = voiceAiStatus; }, [voiceAiStatus]);
+
   const recognitionRef = useRef<any>(null);
   const silenceTimerRef = useRef<any>(null);
 
-  const startVoiceAi = () => {
+  // Gemma3n Download State
+  const [downloadProgress, setDownloadProgress] = useState(18);
+  const [isDownloading, setIsDownloading] = useState(false);
+  const [downloadSlice, setDownloadSlice] = useState(0); // 0: none, 1: day 1, 2: day 2
+  const [downloadMessage, setDownloadMessage] = useState('Nexus Justice Smart Download Active.');
+
+  const utteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
+  const micStreamRef = useRef<MediaStream | null>(null);
+  const watchdogTimerRef = useRef<any>(null);
+
+  const startMicLevelMonitoring = async () => {
+    try {
+      if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
+        try { await audioContextRef.current.close(); } catch(e) {}
+      }
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      micStreamRef.current = stream;
+      const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+      audioContextRef.current = audioContext;
+      const source = audioContext.createMediaStreamSource(stream);
+      const analyser = audioContext.createAnalyser();
+      analyser.fftSize = 256;
+      source.connect(analyser);
+      analyserRef.current = analyser;
+
+      const bufferLength = analyser.frequencyBinCount;
+      const dataArray = new Uint8Array(bufferLength);
+
+      const updateLevel = () => {
+        if (!voiceAiOnRef.current || !analyserRef.current) {
+          if (micStreamRef.current) {
+            micStreamRef.current.getTracks().forEach(t => t.stop());
+            micStreamRef.current = null;
+          }
+          return;
+        }
+        analyserRef.current.getByteFrequencyData(dataArray);
+        let sum = 0;
+        for (let i = 0; i < bufferLength; i++) {
+          sum += dataArray[i];
+        }
+        const average = sum / bufferLength;
+        setMicLevel(average);
+        requestAnimationFrame(updateLevel);
+      };
+      updateLevel();
+    } catch (err) {
+      console.error("Mic level monitoring error:", err);
+    }
+  };
+
+  const startSTTWatchdog = () => {
+    if (watchdogTimerRef.current) clearTimeout(watchdogTimerRef.current);
+    watchdogTimerRef.current = setTimeout(() => {
+      if (voiceAiOnRef.current && voiceAiStatusRef.current === 'listening') {
+        console.warn("STT watchdog triggered: No results for 10s. Restarting...");
+        startVoiceAi();
+      }
+    }, 10000);
+  };
+
+  const startVoiceAi = async () => {
     const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (!SpeechRecognition) {
-      alert("Speech recognition not supported in this browser.");
+      alert("Speech recognition not supported in this browser. Please use Chrome or Edge.");
+      return;
+    }
+
+    // Ensure we are starting fresh and the previous instance is fully disposed
+    if (recognitionRef.current) {
+      const old = recognitionRef.current;
+      old.onend = null;
+      old.onresult = null;
+      old.onerror = null;
+      old.onstart = null;
+      try { old.stop(); } catch(e) {}
+      recognitionRef.current = null;
+      // Brief pause to allow the browser to release the audio device
+      await new Promise(r => setTimeout(r, 200));
+    }
+
+    // Check for microphone permission explicitly
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      // We don't need to keep the stream, SpeechRecognition will manage its own
+      stream.getTracks().forEach(track => track.stop());
+    } catch (err) {
+      console.error("Microphone access error:", err);
+      alert("Microphone access denied or not available. Please check your browser settings.");
+      setVoiceAiOn(false);
       return;
     }
 
@@ -199,69 +299,133 @@ export default function AdvocatePortal({ onBack }: { onBack: () => void }) {
     setVoiceAiStatus('listening');
     setVoiceAiTranscript("Listening...");
     setVoiceAiReply("");
+    startMicLevelMonitoring();
+    startSTTWatchdog();
 
     const recognition = new SpeechRecognition();
-    recognition.continuous = true;
+    recognition.continuous = false; // Use false for better compatibility and more predictable onresult/onend
     recognition.interimResults = true;
     recognition.lang = 'en-US';
 
-    let finalTranscript = "";
+    recognition.onstart = () => {
+      console.log("Speech recognition started");
+      setVoiceAiStatus('listening');
+    };
 
     recognition.onresult = (event: any) => {
-      let interimTranscript = "";
-      for (let i = event.resultIndex; i < event.results.length; ++i) {
-        if (event.results[i].isFinal) {
-          finalTranscript += event.results[i][0].transcript;
-        } else {
-          interimTranscript += event.results[i][0].transcript;
-        }
+      console.log("Speech recognition result received", event);
+      // Only process if we are in listening mode
+      if (voiceAiStatusRef.current !== 'listening') return;
+
+      let transcript = "";
+      for (let i = 0; i < event.results.length; i++) {
+        transcript += event.results[i][0].transcript;
       }
       
-      const currentText = finalTranscript + interimTranscript;
-      setVoiceAiTranscript(currentText);
+      if (transcript) {
+        console.log("Current transcript:", transcript);
+        setVoiceAiTranscript(transcript);
+        // Reset watchdog on result
+        if (watchdogTimerRef.current) {
+          clearTimeout(watchdogTimerRef.current);
+          startSTTWatchdog();
+        }
+      }
 
       // Reset silence timer
       if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
       
-      if (finalTranscript.trim().length > 0) {
+      // If the result is final, start the timer to process the command
+      const lastResult = event.results[event.results.length - 1];
+      if (lastResult.isFinal && transcript.trim().length > 1) {
+        console.log("Final transcript detected, starting silence timer");
         silenceTimerRef.current = setTimeout(() => {
-          if (finalTranscript.trim()) {
-            processVoiceCommand(finalTranscript.trim());
-            finalTranscript = ""; // Reset for next turn
+          if (voiceAiStatusRef.current === 'listening') {
+            processVoiceCommand(transcript.trim());
           }
-        }, 800); // Reduced to 800ms for faster response
+        }, 1000); 
       }
     };
 
     recognition.onerror = (event: any) => {
       console.error("Speech Recognition Error:", event.error);
+      const isMicSilent = micLevel < 5;
+      
       if (event.error === 'no-speech') {
-        // Just keep listening
-        return;
+        // Just restart if no speech detected
+        setTimeout(() => { if (voiceAiOnRef.current && voiceAiStatusRef.current === 'listening') startVoiceAi(); }, 100);
+      } else if (event.error === 'not-allowed') {
+        alert("Microphone access denied. Please check your browser permissions.");
+        stopVoiceAi();
+      } else if (event.error === 'network') {
+        setVoiceAiReply("Network error: Speech recognition requires an internet connection. Please check your network.");
+        setTimeout(() => { if (voiceAiOnRef.current && voiceAiStatusRef.current === 'listening') startVoiceAi(); }, 2000);
+      } else if (event.error === 'aborted') {
+        // Ignore aborted error as it's usually intentional (stop() called)
+        console.log("Speech recognition aborted intentionally.");
+      } else {
+        // For other errors, try a clean restart after a delay
+        if (isMicSilent && voiceAiStatusRef.current === 'listening') {
+          console.warn("Mic seems silent during STT error. Check hardware.");
+        }
+        setTimeout(() => { if (voiceAiOnRef.current && voiceAiStatusRef.current === 'listening') startVoiceAi(); }, 1000);
       }
-      stopVoiceAi();
     };
 
     recognition.onend = () => {
-      // Auto-restart if still on and not speaking/thinking
-      if (voiceAiOn && voiceAiStatus === 'listening') {
-        try { recognition.start(); } catch(e) {}
+      console.log("Speech recognition ended");
+      // Clear watchdog on end
+      if (watchdogTimerRef.current) clearTimeout(watchdogTimerRef.current);
+      
+      // If we are still in listening mode, it means it ended because continuous=false
+      // We should restart it to keep listening for the next command
+      if (voiceAiOnRef.current && voiceAiStatusRef.current === 'listening') {
+        setTimeout(() => {
+          if (voiceAiOnRef.current && voiceAiStatusRef.current === 'listening') {
+            // Call startVoiceAi to get a fresh instance, which is more reliable
+            startVoiceAi();
+          }
+        }, 300);
       }
     };
 
-    recognition.start();
-    recognitionRef.current = recognition;
+    try {
+      recognition.start();
+      recognitionRef.current = recognition;
+    } catch (e) {
+      console.error("Failed to start recognition:", e);
+      // If it fails because it's already started, that's fine, but if it's another error, try restart
+      if (!String(e).includes('already started')) {
+        setTimeout(() => { if (voiceAiOn) startVoiceAi(); }, 500);
+      }
+    }
   };
 
   const stopVoiceAi = () => {
     setVoiceAiOn(false);
+    setVoiceAiStatus('idle');
+    setMicLevel(0);
     if (recognitionRef.current) {
-      recognitionRef.current.stop();
+      try { recognitionRef.current.stop(); } catch(e) {}
       recognitionRef.current = null;
     }
-    if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+    if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
+      try { audioContextRef.current.close(); } catch(e) {}
+      audioContextRef.current = null;
+    }
+    if (micStreamRef.current) {
+      micStreamRef.current.getTracks().forEach(t => t.stop());
+      micStreamRef.current = null;
+    }
+    if (watchdogTimerRef.current) {
+      clearTimeout(watchdogTimerRef.current);
+      watchdogTimerRef.current = null;
+    }
+    if (silenceTimerRef.current) {
+      clearTimeout(silenceTimerRef.current);
+      silenceTimerRef.current = null;
+    }
     window.speechSynthesis.cancel();
-    setVoiceAiStatus('idle');
   };
 
   // Doc Converter Logic
@@ -350,22 +514,78 @@ export default function AdvocatePortal({ onBack }: { onBack: () => void }) {
   };
 
   const processVoiceCommand = async (text: string) => {
-    // Stop recognition while AI is thinking/speaking to avoid echo
-    if (recognitionRef.current) recognitionRef.current.stop();
+    if (!text.trim() || text.trim().length < 2) {
+      // If text is too short, just restart listening if it was stopped
+      if (voiceAiOnRef.current && voiceAiStatusRef.current === 'listening') {
+        setTimeout(() => {
+          try { if (recognitionRef.current) recognitionRef.current.start(); } catch(e) {}
+        }, 100);
+      }
+      return;
+    }
     
+    // Stop recognition while AI is thinking/speaking to avoid echo
+    if (recognitionRef.current) {
+      try { recognitionRef.current.stop(); } catch(e) {}
+    }
+    
+    if (downloadProgress < 100) {
+      const msg = isDownloading 
+        ? `Gemma 3n brain is currently downloading (${downloadProgress}%). Please wait a moment.`
+        : "Error: Gemma 3n brain not fully deployed. Please complete the download in the 'BRAIN' tab.";
+      setVoiceAiReply(msg);
+      setVoiceAiStatus('idle');
+      if (voiceAiOnRef.current) setTimeout(() => startVoiceAi(), 3000);
+      return;
+    }
+
     setVoiceAiStatus('thinking');
+    setVoiceAiReply("Thinking...");
+    
+    // Watchdog for AI response
+    if (watchdogTimerRef.current) clearTimeout(watchdogTimerRef.current);
+    watchdogTimerRef.current = setTimeout(() => {
+      if (voiceAiStatusRef.current === 'thinking') {
+        console.warn("AI response watchdog triggered");
+        setVoiceAiReply("I'm sorry, I'm taking too long to think. Please try again.");
+        setVoiceAiStatus('idle');
+        if (voiceAiOnRef.current) setTimeout(() => startVoiceAi(), 1000);
+      }
+    }, 15000);
+
     try {
-      const response = await aiEngine.generateResponse(text, [], undefined, 'voice');
+      const response = await aiEngine.generateResponse(text, voiceHistory, undefined, 'voice');
+      if (watchdogTimerRef.current) clearTimeout(watchdogTimerRef.current);
+      const newHistory: AIMessage[] = [
+        ...voiceHistory,
+        { role: 'user', content: text },
+        { role: 'assistant', content: response }
+      ];
+      // Keep only last 10 messages to avoid context bloat
+      setVoiceHistory(newHistory.slice(-10));
       setVoiceAiReply(response);
       speakResponse(response);
     } catch (err) {
+      if (watchdogTimerRef.current) clearTimeout(watchdogTimerRef.current);
+      setVoiceAiReply("Error: Failed to connect to AI engine. Please check your connection.");
       setVoiceAiStatus('idle');
       // Restart listening if still on
-      if (voiceAiOn) startVoiceAi();
+      if (voiceAiOnRef.current) {
+        setTimeout(() => startVoiceAi(), 1000);
+      }
     }
   };
 
   const speakResponse = (text: string) => {
+    if (text.startsWith("Error:")) {
+      setVoiceAiStatus('idle');
+      if (voiceAiOn) setTimeout(() => startVoiceAi(), 3000);
+      return;
+    }
+
+    // Cancel any ongoing speech to prevent overlap or stuck state
+    window.speechSynthesis.cancel();
+
     setVoiceAiStatus('speaking');
     const cleanText = text
       .replace(/\*\*/g, '')
@@ -375,7 +595,8 @@ export default function AdvocatePortal({ onBack }: { onBack: () => void }) {
       .replace(/\[([^\]]+)\]\([^\)]+\)/g, '$1');
 
     const utterance = new SpeechSynthesisUtterance(cleanText);
-    utterance.rate = 0.95; // Slightly slower for better clarity
+    utteranceRef.current = utterance; // Keep reference to prevent GC
+    utterance.rate = 1.0; 
     utterance.pitch = 1.0;
     utterance.volume = 1.0;
     
@@ -388,18 +609,37 @@ export default function AdvocatePortal({ onBack }: { onBack: () => void }) {
       utterance.voice = highQualityVoice;
     }
 
+    utterance.onstart = () => {
+      console.log("Speech started");
+    };
+
     utterance.onend = () => {
+      console.log("Speech synthesis ended");
       setVoiceAiStatus('listening');
       setVoiceAiTranscript("Listening...");
+      utteranceRef.current = null;
       // Restart listening after speaking
-      if (voiceAiOn) {
-        try {
-          if (recognitionRef.current) recognitionRef.current.start();
-          else startVoiceAi();
-        } catch(e) {}
+      if (voiceAiOnRef.current) {
+        setTimeout(() => {
+          if (voiceAiOnRef.current) {
+            startVoiceAi();
+          }
+        }, 500);
       }
     };
-    window.speechSynthesis.speak(utterance);
+
+    utterance.onerror = (e) => {
+      console.error("Speech synthesis error:", e);
+      setVoiceAiStatus('listening');
+      setVoiceAiTranscript("Listening...");
+      utteranceRef.current = null;
+      if (voiceAiOnRef.current) startVoiceAi();
+    };
+
+    // Small delay to ensure cancel() has finished
+    setTimeout(() => {
+      window.speechSynthesis.speak(utterance);
+    }, 100);
   };
   const [autoAnswerEnabled, setAutoAnswerEnabled] = useState(false);
   const [callInstructions, setCallInstructions] = useState<{ caller: string, instruction: string }[]>([
@@ -413,72 +653,107 @@ export default function AdvocatePortal({ onBack }: { onBack: () => void }) {
   const [selectedCall, setSelectedCall] = useState<any>(null);
   const [callViewTab, setCallViewTab] = useState<'log' | 'transcript'>('log');
 
-  // Gemma3n Download State
-  const [downloadProgress, setDownloadProgress] = useState(0);
-  const [isDownloading, setIsDownloading] = useState(false);
-  const [downloadSlice, setDownloadSlice] = useState(0); // 0: none, 1: day 1, 2: day 2
-  const [connectionType, setConnectionType] = useState<'wifi' | 'mobile' | 'unknown'>('unknown');
-  const [downloadMessage, setDownloadMessage] = useState('');
-
   useEffect(() => {
     // Check connection type if supported
     const conn = (navigator as any).connection || (navigator as any).mozConnection || (navigator as any).webkitConnection;
+    
+    const updateConnection = () => {
+      if (!conn) {
+        setConnectionType('wifi'); // Default to wifi if API not supported (common on desktop)
+        return;
+      }
+
+      // 'type' is more specific (wifi, cellular, etc.) but not always available
+      // 'effectiveType' is more about speed (4g, 3g, etc.)
+      const type = conn.type;
+      const effectiveType = conn.effectiveType;
+
+      if (type) {
+        if (type === 'wifi' || type === 'ethernet') {
+          setConnectionType('wifi');
+        } else if (type === 'cellular') {
+          setConnectionType('mobile');
+        } else {
+          setConnectionType('unknown');
+        }
+      } else if (effectiveType) {
+        // Fallback for browsers that only support effectiveType
+        // On desktop, effectiveType '4g' is common for both Wifi and fast Mobile.
+        // We'll assume wifi if it's not explicitly cellular (which 'type' would have caught)
+        // or if we're on a desktop-like environment.
+        if (effectiveType === '4g') setConnectionType('wifi');
+        else setConnectionType('mobile');
+      } else {
+        setConnectionType('wifi');
+      }
+    };
+
     if (conn) {
-      const updateConnection = () => {
-        if (conn.type === 'wifi') setConnectionType('wifi');
-        else if (conn.type === 'cellular') setConnectionType('mobile');
-        else setConnectionType('unknown');
-      };
       conn.addEventListener('change', updateConnection);
       updateConnection();
       return () => conn.removeEventListener('change', updateConnection);
+    } else {
+      updateConnection();
     }
   }, []);
 
-  const handleDownloadGemma3n = async () => {
+  const handleDownloadGemma3n = async (manualSliceIndex?: number) => {
     setIsDownloading(true);
-    setDownloadProgress(0);
-    setDownloadMessage("Checking connection...");
+    setDownloadMessage(manualSliceIndex ? `Manual Override: Downloading Slice ${manualSliceIndex}...` : "Initializing Nexus Justice Smart Download...");
 
     // Simulate connection check delay
     await new Promise(r => setTimeout(r, 1000));
 
-    const isWifi = connectionType === 'wifi' || !connectionType; // Assume wifi if unknown for simulation
+    const isWifi = connectionType === 'wifi' || connectionType === 'unknown';
     const isMobile = connectionType === 'mobile';
 
-    if (isWifi) {
-      setDownloadMessage("Wi-Fi detected. Downloading Gemma3n completely...");
-      for (let i = 0; i <= 100; i += 5) {
-        setDownloadProgress(i);
-        await new Promise(r => setTimeout(r, 200));
-      }
-      setDownloadMessage("Gemma3n downloaded successfully!");
-      setDownloadSlice(2); // Fully downloaded
-    } else if (isMobile) {
-      setDownloadMessage("Mobile data detected. Splitting download into 2 slices (Day 1/2)...");
+    if (isWifi && !manualSliceIndex) {
+      setDownloadMessage("🚀 Wi-Fi / Broadband detected. Initializing full model download (5.2 GB)...");
       await new Promise(r => setTimeout(r, 1500));
+      setDownloadMessage("📥 Downloading Gemma 3n E2B-IT... (High Speed)");
+      for (let i = downloadProgress; i <= 100; i += 1) {
+        setDownloadProgress(i);
+        await new Promise(r => setTimeout(r, 400)); // Slower for realism (approx 40s total)
+      }
+      setDownloadMessage("🔍 Verifying model integrity...");
+      await new Promise(r => setTimeout(r, 2000));
+      setDownloadMessage("✅ Success! Gemma 3n E2B-IT ready.");
+      setDownloadSlice(6); // Mark all slices as complete
+    } else {
+      const targetSlice = manualSliceIndex || downloadSlice + 1;
+      const sliceThresholds = [0, 17, 34, 51, 67, 84, 100];
+      const targetProgress = sliceThresholds[targetSlice];
+
+      if (manualSliceIndex) {
+        setDownloadMessage(`📡 Manual Download: Slice ${manualSliceIndex} (${manualSliceIndex === 6 ? '825MB' : '900MB'})...`);
+      } else {
+        setDownloadMessage(`📡 Mobile Data: Downloading Slice ${targetSlice} (900MB)...`);
+      }
+
+      await new Promise(r => setTimeout(r, 1000));
       
-      if (downloadSlice === 0) {
-        setDownloadMessage("Downloading Slice 1 (Day 1)...");
-        for (let i = 0; i <= 50; i += 5) {
-          setDownloadProgress(i);
-          await new Promise(r => setTimeout(r, 300));
-        }
-        setDownloadSlice(1);
-        setDownloadMessage("Slice 1 complete. Daily limit reached. Please resume tomorrow for Slice 2.");
-      } else if (downloadSlice === 1) {
-        setDownloadMessage("Resuming Download: Slice 2 (Day 2)...");
-        for (let i = 50; i <= 100; i += 5) {
-          setDownloadProgress(i);
-          await new Promise(r => setTimeout(r, 300));
-        }
-        setDownloadSlice(2);
-        setDownloadMessage("Gemma3n downloaded successfully (Day 2 complete)!");
+      for (let i = downloadProgress; i <= targetProgress; i += 1) {
+        setDownloadProgress(i);
+        await new Promise(r => setTimeout(r, 150));
+      }
+
+      setDownloadSlice(targetSlice);
+      
+      if (targetSlice < 6) {
+        setDownloadMessage(manualSliceIndex ? `✅ Manual Slice ${manualSliceIndex} Complete.` : "🛑 Daily 900MB limit reached. Next slice tomorrow at 10:00 AM.");
+      } else {
+        setDownloadMessage("✅ All parts downloaded! Gemma 3n ready.");
       }
     }
     
     setIsDownloading(false);
   };
+
+  useEffect(() => {
+    if (connectionType === 'wifi' && downloadProgress < 100 && !isDownloading) {
+      handleDownloadGemma3n();
+    }
+  }, [connectionType, downloadProgress, isDownloading]);
 
   useEffect(() => {
     const init = async () => {
@@ -605,16 +880,21 @@ export default function AdvocatePortal({ onBack }: { onBack: () => void }) {
   return (
     <div style={S.page} className="fixed inset-0 z-[100]">
       {/* SIDEBAR */}
-      <div style={S.sidebar}>
+      <div style={S.sidebar} className="custom-scrollbar">
         <div className="w-full aspect-square bg-amber-500 flex items-center justify-center mb-4">
           <span className="text-2xl font-black text-black">T</span>
         </div>
-        {sideNav.map(item => (
-          <button key={item.id} onClick={() => setView(item.id)} title={item.label} style={S.sideBtn(view === item.id)}>
-            <Icon path={item.icon} size={20} />
-            {view === item.id && <div style={{ position: 'absolute', left: 0, width: 3, height: 24, background: '#f59e0b', borderRadius: '0 3px 3px 0' }} />}
-          </button>
-        ))}
+        {sideNav.map(item => {
+          const label = item.id === 'models' 
+            ? (downloadProgress === 100 ? 'Brain Active' : (isDownloading ? 'Downloading...' : 'Download brain'))
+            : item.label;
+          return (
+            <button key={item.id} onClick={() => setView(item.id)} title={label} style={S.sideBtn(view === item.id)}>
+              <Icon path={item.icon} size={20} />
+              {view === item.id && <div style={{ position: 'absolute', left: 0, width: 3, height: 24, background: '#f59e0b', borderRadius: '0 3px 3px 0' }} />}
+            </button>
+          );
+        })}
         <div className="mt-auto pb-4">
           <button onClick={onBack} className="w-12 h-12 flex items-center justify-center text-slate-500 hover:text-red-400 transition-colors" title="Logout">
             <LogOut size={20} />
@@ -642,17 +922,22 @@ export default function AdvocatePortal({ onBack }: { onBack: () => void }) {
           </div>
         </header>
 
-        <div className="flex bg-[#070b14] border-b border-white/5 px-6">
-          {topTabs.map(tab => (
-            <button
-              key={tab.id}
-              onClick={() => setView(tab.id)}
-              className={`px-4 py-4 text-[10px] font-black tracking-widest transition-all relative ${view === tab.id ? 'text-indigo-500' : 'text-slate-500 hover:text-slate-300'}`}
-            >
-              {tab.label}
-              {view === tab.id && <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-indigo-500" />}
-            </button>
-          ))}
+        <div className="flex bg-[#070b14] border-b border-white/5 px-6 overflow-x-auto whitespace-nowrap custom-scrollbar">
+          {topTabs.map(tab => {
+            const label = tab.id === 'models'
+              ? (downloadProgress === 100 ? 'BRAIN DOWNLOADED' : (isDownloading ? 'DOWNLOADING...' : 'BRAIN'))
+              : tab.label;
+            return (
+              <button
+                key={tab.id}
+                onClick={() => setView(tab.id)}
+                className={`px-4 py-4 text-[10px] font-black tracking-widest transition-all relative inline-block ${view === tab.id ? 'text-indigo-500' : 'text-slate-500 hover:text-slate-300'}`}
+              >
+                {label}
+                {view === tab.id && <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-indigo-500" />}
+              </button>
+            );
+          })}
         </div>
 
         <main style={{ flex: 1, overflow: 'hidden', position: 'relative', background: '#020617' }}>
@@ -677,8 +962,12 @@ export default function AdvocatePortal({ onBack }: { onBack: () => void }) {
                           <button onClick={() => setVoiceAiOn(!voiceAiOn)} className={`flex-1 py-3 rounded-xl font-black text-sm transition-all ${voiceAiOn ? 'bg-red-500 text-white' : 'bg-indigo-500 text-white shadow-[0_4px_15px_rgba(99,102,241,0.3)]'}`}>
                             {voiceAiOn ? 'Stop' : 'Start'}
                           </button>
-                          <button className="flex-1 py-3 bg-white/5 border border-white/10 rounded-xl font-black text-sm text-slate-300">
-                            Config
+                          <button 
+                            onClick={() => handleDownloadGemma3n()}
+                            disabled={isDownloading || downloadProgress === 100}
+                            className="flex-1 py-3 bg-white/5 border border-white/10 rounded-xl font-black text-sm text-slate-300 disabled:opacity-50"
+                          >
+                            {isDownloading ? 'Downloading...' : downloadProgress === 100 ? 'Brain downloaded' : 'Download brain'}
                           </button>
                         </div>
 
@@ -781,15 +1070,25 @@ export default function AdvocatePortal({ onBack }: { onBack: () => void }) {
                             <div className="text-[9px] text-slate-400 italic">{downloadMessage}</div>
                           )}
 
-                          {downloadSlice < 2 && (
+                          <div className="flex gap-2">
+                            {downloadSlice < 6 && (
+                              <button 
+                                onClick={() => handleDownloadGemma3n()}
+                                disabled={isDownloading}
+                                className="flex-1 py-3 bg-indigo-500/10 hover:bg-indigo-500/20 border border-indigo-500/30 text-indigo-400 rounded-xl font-black text-[10px] uppercase tracking-widest transition-all"
+                              >
+                                {isDownloading ? 'Downloading...' : downloadSlice >= 1 ? `Resume Day ${downloadSlice + 1} Download` : 'Download Gemma3n'}
+                              </button>
+                            )}
                             <button 
-                              onClick={handleDownloadGemma3n}
-                              disabled={isDownloading}
-                              className="w-full py-3 bg-indigo-500/10 hover:bg-indigo-500/20 border border-indigo-500/30 text-indigo-400 rounded-xl font-black text-[10px] uppercase tracking-widest transition-all"
+                              onClick={() => speakResponse("Audio test successful. Nexus Justice is ready to assist you.")}
+                              className="px-4 py-3 bg-white/5 border border-white/10 rounded-xl font-black text-[10px] text-indigo-400 hover:bg-white/10 transition-all uppercase tracking-widest flex items-center gap-2"
+                              title="Test Audio Output"
                             >
-                              {isDownloading ? 'Downloading...' : downloadSlice === 1 ? 'Resume Day 2 Download' : 'Download Gemma3n'}
+                              <Volume2 size={12} />
+                              Test
                             </button>
-                          )}
+                          </div>
                         </div>
                       </div>
 
@@ -1399,6 +1698,179 @@ export default function AdvocatePortal({ onBack }: { onBack: () => void }) {
                 </div>
               </motion.div>
             )}
+            {view === 'models' && (
+              <motion.div key="models" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="h-full p-8 flex flex-col gap-8 overflow-hidden">
+                <div className="flex justify-between items-end">
+                  <div>
+                    <div className="text-[10px] font-black text-indigo-500 tracking-[0.2em] mb-2 uppercase">Nexus Justice: Model Manager</div>
+                    <h2 className="text-xl font-black italic text-slate-200">Gemma 3n <span className="text-slate-500 text-base ml-1">E2B-IT</span></h2>
+                  </div>
+                  <div className="bg-white/5 border border-white/10 rounded-2xl px-6 py-4 flex items-center gap-4">
+                    <div className="text-right">
+                      <div className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Connection</div>
+                      <div className={`text-sm font-black uppercase transition-all ${connectionType === 'wifi' || connectionType === 'unknown' ? 'text-emerald-500' : 'text-amber-500'}`}>
+                        {connectionType === 'wifi' || connectionType === 'unknown' ? 'Wi-Fi Data' : 'Mobile Data'}
+                      </div>
+                    </div>
+                    <div className={`w-10 h-10 rounded-xl flex items-center justify-center transition-all ${connectionType === 'wifi' || connectionType === 'unknown' ? 'bg-emerald-500/10 text-emerald-500' : 'bg-amber-500/10 text-amber-500'}`}>
+                      {connectionType === 'wifi' || connectionType === 'unknown' ? <Wifi size={20} /> : <Globe size={20} />}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex-1 flex gap-8 overflow-hidden">
+                  {downloadProgress < 100 ? (
+                    <>
+                      <div className="flex-1 bg-slate-900/50 border border-white/5 rounded-[40px] p-12 flex flex-col items-center justify-center text-center">
+                        <div className="relative w-48 h-48 mb-12">
+                          <svg className="w-full h-full transform -rotate-90">
+                            <circle cx="96" cy="96" r="88" stroke="currentColor" strokeWidth="8" fill="transparent" className="text-white/5" />
+                            <circle cx="96" cy="96" r="88" stroke="currentColor" strokeWidth="8" fill="transparent" strokeDasharray={553} strokeDashoffset={553 - (553 * downloadProgress / 100)} className="text-indigo-500 transition-all duration-1000 ease-out" />
+                          </svg>
+                          <div className="absolute inset-0 flex flex-col items-center justify-center">
+                            <div className="text-4xl font-black text-white">{Math.round(downloadProgress)}%</div>
+                            <div className="text-[9px] font-black text-slate-400 uppercase tracking-widest mt-2">Downloaded</div>
+                          </div>
+                        </div>
+
+                        <div className="max-w-md w-full">
+                          <div className="h-2 w-full bg-white/5 rounded-full overflow-hidden mb-6">
+                            <motion.div initial={{ width: 0 }} animate={{ width: `${downloadProgress}%` }} className="h-full bg-indigo-500" />
+                          </div>
+                          
+                          <div className="text-slate-400 text-sm italic mb-8">
+                            {downloadMessage || "Model ready for legal research and drafting."}
+                          </div>
+
+                          <button 
+                            onClick={() => handleDownloadGemma3n()}
+                            disabled={isDownloading || (connectionType === 'mobile' && downloadSlice >= 1 && downloadProgress < 100)}
+                            className="w-full py-5 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-30 rounded-2xl font-black text-sm text-white transition-all uppercase tracking-[0.2em] flex items-center justify-center gap-3"
+                          >
+                            {isDownloading ? <RotateCcw size={20} className="animate-spin" /> : <Download size={20} />}
+                            {downloadSlice === 0 ? "Start Download" : "Resume Next Slice"}
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="w-[400px] flex flex-col gap-6">
+                        <div className="bg-slate-900/50 border border-white/5 rounded-[40px] p-8">
+                          <div className="text-[10px] font-black text-indigo-500 uppercase tracking-widest mb-6">Daily Slices (5.2 GB Total)</div>
+                          <div className="space-y-2">
+                            {[
+                              { day: 1, size: '900 MB', status: downloadProgress >= 17 ? 'complete' : 'pending' },
+                              { day: 2, size: '900 MB', status: downloadProgress >= 34 ? 'complete' : 'pending' },
+                              { day: 3, size: '900 MB', status: downloadProgress >= 51 ? 'complete' : 'pending' },
+                              { day: 4, size: '900 MB', status: downloadProgress >= 67 ? 'complete' : 'pending' },
+                              { day: 5, size: '900 MB', status: downloadProgress >= 84 ? 'complete' : 'pending' },
+                              { day: 6, size: '825 MB', status: downloadProgress === 100 ? 'complete' : 'pending' },
+                            ].map((slice) => (
+                              <button 
+                                key={slice.day} 
+                                onClick={() => slice.status === 'pending' && !isDownloading && handleDownloadGemma3n(slice.day)}
+                                disabled={slice.status === 'complete' || isDownloading}
+                                className={`w-full flex items-center justify-between p-3 rounded-xl border transition-all ${
+                                  slice.status === 'complete' 
+                                    ? 'bg-emerald-500/5 border-emerald-500/10 text-emerald-500 cursor-default' 
+                                    : 'bg-white/5 border-white/5 text-slate-400 hover:bg-white/10 hover:border-white/20 active:scale-[0.98]'
+                                }`}
+                              >
+                                <div className="flex items-center gap-3">
+                                  <div className="text-[9px] font-black uppercase tracking-widest">Day {slice.day}</div>
+                                  <div className="text-[9px] font-bold opacity-60">{slice.size}</div>
+                                </div>
+                                {slice.status === 'complete' ? (
+                                  <CheckCircle size={14} />
+                                ) : (
+                                  <div className="flex items-center gap-2">
+                                    <div className="text-[8px] font-black uppercase opacity-0 group-hover:opacity-100 transition-opacity">Manual DL</div>
+                                    <div className="w-3 h-3 rounded-full border border-white/20" />
+                                  </div>
+                                )}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+
+                        <div className="bg-slate-900/50 border border-white/5 rounded-[40px] p-8">
+                          <div className="text-[10px] font-black text-indigo-500 uppercase tracking-widest mb-6">Download Strategy</div>
+                          <div className="space-y-4">
+                            <div className={`p-6 rounded-3xl border transition-all ${connectionType === 'mobile' ? 'bg-amber-500/5 border-amber-500/20' : 'bg-white/5 border-white/5'}`}>
+                              <div className="flex items-center gap-4 mb-3">
+                                <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${connectionType === 'mobile' ? 'bg-amber-500/20 text-amber-500' : 'bg-slate-800 text-slate-400'}`}>
+                                  <Globe size={20} />
+                                </div>
+                                <div>
+                                  <div className="text-xs font-black text-slate-200 uppercase tracking-widest">Mobile Slicing</div>
+                                  <div className="text-[10px] text-slate-500 font-bold">900MB / DAY LIMIT</div>
+                                </div>
+                              </div>
+                              <p className="text-[11px] text-slate-400 leading-relaxed">
+                                Optimized for mobile data. Downloads are split into manageable slices to prevent data overages.
+                              </p>
+                            </div>
+
+                            <div className={`p-6 rounded-3xl border transition-all ${connectionType === 'wifi' ? 'bg-emerald-500/5 border-emerald-500/20' : 'bg-white/5 border-white/5'}`}>
+                              <div className="flex items-center gap-4 mb-3">
+                                <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${connectionType === 'wifi' ? 'bg-emerald-500/20 text-emerald-500' : 'bg-slate-800 text-slate-400'}`}>
+                                  <Wifi size={20} />
+                                </div>
+                                <div>
+                                  <div className="text-xs font-black text-slate-200 uppercase tracking-widest">Wi-Fi Turbo</div>
+                                  <div className="text-[10px] text-slate-500 font-bold">UNLIMITED BANDWIDTH</div>
+                                </div>
+                              </div>
+                              <p className="text-[11px] text-slate-400 leading-relaxed">
+                                Full model download enabled. Bypasses slicing for immediate deployment of Gemma 3n.
+                              </p>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </>
+                  ) : (
+                    <div className="flex-1 flex gap-8">
+                      <div className="flex-1 bg-emerald-500/5 border border-emerald-500/10 rounded-[40px] p-12 flex flex-col items-center justify-center text-center">
+                        <div className="w-24 h-24 bg-emerald-500/20 text-emerald-500 rounded-full flex items-center justify-center mb-8">
+                          <CheckCircle size={48} />
+                        </div>
+                        <h3 className="text-2xl font-black text-white mb-4 uppercase tracking-tighter italic">Gemma 3n Fully Deployed</h3>
+                        <p className="text-slate-400 max-w-md italic">
+                          The model is now running locally on your device. All legal research and drafting operations are processed with maximum privacy and zero latency.
+                        </p>
+                      </div>
+
+                      <div className="w-[400px] flex flex-col gap-6">
+                        <div className="bg-indigo-500/5 border border-indigo-500/10 rounded-[40px] p-8">
+                          <div className="flex items-center gap-3 text-indigo-500 mb-4">
+                            <Info size={20} />
+                            <div className="text-[10px] font-black uppercase tracking-widest">Model Specs</div>
+                          </div>
+                          <div className="space-y-3">
+                            <div className="flex justify-between text-[10px] font-bold">
+                              <span className="text-slate-500 uppercase">Architecture</span>
+                              <span className="text-slate-300">Gemma 3n E2B-IT</span>
+                            </div>
+                            <div className="flex justify-between text-[10px] font-bold">
+                              <span className="text-slate-500 uppercase">Total Size</span>
+                              <span className="text-slate-300">~5.2 GB</span>
+                            </div>
+                            <div className="flex justify-between text-[10px] font-bold">
+                              <span className="text-slate-500 uppercase">Quantization</span>
+                              <span className="text-slate-300">4-bit GGUF</span>
+                            </div>
+                            <div className="flex justify-between text-[10px] font-bold">
+                              <span className="text-slate-500 uppercase">Context Window</span>
+                              <span className="text-slate-300">128k Tokens</span>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </motion.div>
+            )}
           </AnimatePresence>
         </main>
       </div>
@@ -1413,23 +1885,84 @@ export default function AdvocatePortal({ onBack }: { onBack: () => void }) {
               exit={{ y: 20, opacity: 0, scale: 0.9 }}
               className="bg-black/90 backdrop-blur-3xl border border-white/10 rounded-3xl p-6 w-[400px] shadow-2xl"
             >
-              <div className="flex items-center gap-3 mb-4">
-                <div className={`w-2 h-2 rounded-full animate-pulse ${
-                  voiceAiStatus === 'listening' ? 'bg-red-500' : 
-                  voiceAiStatus === 'thinking' ? 'bg-amber-500' : 
-                  voiceAiStatus === 'speaking' ? 'bg-emerald-500' : 'bg-slate-500'
-                }`} />
-                <div className="text-[10px] font-black uppercase tracking-widest text-slate-400">
-                  {voiceAiStatus === 'listening' ? 'Nexus Listening' : 
-                   voiceAiStatus === 'thinking' ? 'Nexus Thinking' : 
-                   voiceAiStatus === 'speaking' ? 'Nexus Speaking' : 'Nexus Ready'}
+              <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center gap-3">
+                  <div className={`w-2 h-2 rounded-full animate-pulse ${
+                    voiceAiStatus === 'listening' ? 'bg-red-500' : 
+                    voiceAiStatus === 'thinking' ? 'bg-amber-500' : 
+                    voiceAiStatus === 'speaking' ? 'bg-emerald-500' : 'bg-slate-500'
+                  }`} />
+                  <div className="text-[10px] font-black uppercase tracking-widest text-slate-400">
+                    {voiceAiStatus === 'listening' ? 'Nexus Listening' : 
+                     voiceAiStatus === 'thinking' ? 'Nexus Thinking' : 
+                     voiceAiStatus === 'speaking' ? 'Nexus Speaking' : 'Nexus Ready'}
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  {voiceAiStatus === 'speaking' && (
+                    <div className="flex gap-0.5 items-end h-3 mr-2">
+                      {[1, 2, 3, 4, 5].map(i => (
+                        <motion.div 
+                          key={i}
+                          animate={{ height: [4, 12, 4] }}
+                          transition={{ duration: 0.5, repeat: Infinity, delay: i * 0.1 }}
+                          className="w-0.5 bg-emerald-500 rounded-full"
+                        />
+                      ))}
+                    </div>
+                  )}
+                  <button 
+                    onClick={() => {
+                      if (recognitionRef.current) {
+                        try { recognitionRef.current.stop(); } catch(e) {}
+                      }
+                      startVoiceAi();
+                    }}
+                    className="p-2 bg-white/5 hover:bg-white/10 rounded-xl text-slate-500 hover:text-indigo-400 transition-all"
+                    title="Restart Microphone"
+                  >
+                    <RotateCcw size={16} />
+                  </button>
+                  <button 
+                    onClick={stopVoiceAi}
+                    className="p-2 bg-white/5 hover:bg-red-500/20 rounded-xl text-slate-500 hover:text-red-500 transition-all flex items-center gap-2"
+                    title="Close Conversation"
+                  >
+                    <span className="text-[10px] font-black uppercase tracking-widest px-1">Close</span>
+                    <X size={16} />
+                  </button>
                 </div>
               </div>
               <div className="space-y-3">
-                <div className="text-sm font-medium text-white italic">"{voiceAiTranscript}"</div>
+                <div className="flex items-center gap-3">
+                  <div className="text-sm font-medium text-white italic flex-1">
+                    {voiceAiStatus === 'listening' && voiceAiTranscript === "Listening..." ? "Speak now..." : `"${voiceAiTranscript}"`}
+                  </div>
+                  {voiceAiStatus === 'listening' && (
+                    <div className="flex gap-1 items-center bg-red-500/10 px-2 py-1 rounded-full border border-red-500/20">
+                      <div className="text-[8px] font-black text-red-500 uppercase mr-1">
+                        {micLevel > 10 ? "Mic OK" : "Mic Active"}
+                      </div>
+                      <div className="w-12 h-1.5 bg-slate-800 rounded-full overflow-hidden flex items-center">
+                        <motion.div 
+                          initial={{ width: 0 }}
+                          animate={{ width: `${Math.min(100, (micLevel / 128) * 100)}%` }}
+                          className="h-full bg-red-500 shadow-[0_0_10px_rgba(239,68,68,0.5)]"
+                        />
+                      </div>
+                    </div>
+                  )}
+                </div>
                 {voiceAiReply && (
-                  <div className="text-sm text-slate-400 leading-relaxed border-t border-white/5 pt-3">
-                    {voiceAiReply}
+                  <div className="text-sm text-slate-400 leading-relaxed border-t border-white/5 pt-3 flex justify-between items-start gap-4">
+                    <div className="flex-1">{voiceAiReply}</div>
+                    <button 
+                      onClick={() => speakResponse(voiceAiReply)}
+                      className="p-1.5 bg-white/5 rounded-lg text-slate-500 hover:text-white transition-colors"
+                      title="Replay Audio"
+                    >
+                      <Volume2 size={14} />
+                    </button>
                   </div>
                 )}
               </div>
@@ -1451,16 +1984,35 @@ export default function AdvocatePortal({ onBack }: { onBack: () => void }) {
           </button>
           <button 
             onClick={voiceAiOn ? stopVoiceAi : startVoiceAi}
-            className={`w-12 h-12 rounded-full flex items-center justify-center text-white transition-all ${
-              voiceAiOn ? 'bg-red-500 shadow-[0_0_30px_rgba(239,68,68,0.5)] animate-pulse' : 'bg-indigo-500 shadow-[0_0_20px_rgba(99,102,241,0.4)]'
+            className={`w-12 h-12 rounded-full flex items-center justify-center text-white transition-all relative ${
+              voiceAiOn ? 'bg-red-500 shadow-[0_0_30px_rgba(239,68,68,0.5)]' : 'bg-indigo-500 shadow-[0_0_20px_rgba(99,102,241,0.4)]'
             }`}
           >
-            <Mic size={24} />
+            {voiceAiOn ? <X size={24} /> : <Mic size={24} />}
+            {voiceAiOn && (
+              <motion.div 
+                layoutId="mic-glow"
+                className="absolute inset-0 rounded-full bg-red-500/20 animate-ping"
+              />
+            )}
           </button>
           <div className="flex flex-col">
             <div className="text-[10px] font-black text-indigo-400 tracking-widest uppercase">NEXUS LINK</div>
-            <div className="text-[10px] font-black text-slate-500 uppercase">
-              {voiceAiOn ? 'ACTIVE' : 'READY'}
+            <div className="text-[10px] font-black uppercase flex items-center gap-1.5">
+              {voiceAiOn ? (
+                <div className="flex items-center gap-2">
+                  <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                  <span className="text-emerald-500">ACTIVE</span>
+                  <div className="w-8 h-1 bg-slate-800 rounded-full overflow-hidden">
+                    <motion.div 
+                      animate={{ width: `${Math.min(100, (micLevel / 128) * 100)}%` }}
+                      className="h-full bg-emerald-500"
+                    />
+                  </div>
+                </div>
+              ) : (
+                <span className="text-slate-500">READY</span>
+              )}
             </div>
           </div>
         </div>

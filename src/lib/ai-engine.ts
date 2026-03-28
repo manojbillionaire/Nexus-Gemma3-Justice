@@ -71,7 +71,7 @@ export class HybridAIEngine {
       }
 
       // 3. Voice/General Task -> Gemma3n (via Gemini API)
-      const modelName = 'gemma-3-1b-it';
+      const modelName = 'gemini-3-flash-preview';
       
       const contents: any[] = history.map(m => ({
         role: m.role === 'assistant' ? 'model' : 'user',
@@ -94,21 +94,22 @@ export class HybridAIEngine {
         model: modelName,
         contents: contents,
         config: {
-          thinkingConfig: { thinkingLevel: ThinkingLevel.LOW }
+          systemInstruction: "You are Nexus Justice, a professional legal voice assistant. You are currently speaking to the user via voice. Keep your responses concise, formal, and helpful. Maintain context from previous turns in the conversation. Do not mention that you are a text-based AI or that you cannot hear sound, as you are integrated into a voice-capable system."
         }
       });
 
       return response.text || "I'm sorry, I couldn't generate a response.";
-    } catch (error) {
+    } catch (error: any) {
       console.error("AI Engine Error:", error);
-      return "Error: Failed to connect to AI engine.";
+      const errorMessage = error?.message || "Unknown error";
+      return `Error: Failed to connect to AI engine. (${errorMessage})`;
     }
   }
 
   private async orchestrate(prompt: string): Promise<AITaskType> {
     try {
       const response = await this.ai.models.generateContent({
-        model: 'gemma-3-1b-it',
+        model: 'gemini-3-flash-preview',
         contents: [{ 
           role: 'user', 
           parts: [{ 
