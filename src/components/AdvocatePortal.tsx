@@ -6,11 +6,12 @@ import {
   ChevronLeft, ChevronRight, Play, Square, Copy, ExternalLink,
   CheckCircle, AlertTriangle, Info, X, Search, Plus, RotateCcw,
   Volume2, Send, Trash, Check, AlertCircle, LogOut, Upload, File,
-  Maximize2, Minimize2
+  Maximize2, Minimize2, Cpu
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import ReactMarkdown from 'react-markdown';
-import { HybridAIEngine, AIMessage } from "../lib/ai-engine";
+import { VoiceVisualizer } from './VoiceVisualizer';
+import { HybridAIEngine, AIMessage, AIResponse } from "../lib/ai-engine";
 import { LocalDB } from "../lib/local-db";
 import { jsPDF } from "jspdf";
 import { Document, Packer, Paragraph, TextRun } from "docx";
@@ -185,17 +186,25 @@ export default function AdvocatePortal({ onBack }: { onBack: () => void }) {
   ]);
 
   const [voiceAiOn, setVoiceAiOn] = useState(false);
+  const [voiceLang, setVoiceLang] = useState<'en-US' | 'ml-IN'>('en-US');
   const [voiceAiTranscript, setVoiceAiTranscript] = useState("");
   const [voiceAiReply, setVoiceAiReply] = useState("");
-  const [voiceAiStatus, setVoiceAiStatus] = useState<'idle' | 'listening' | 'thinking' | 'speaking'>('idle');
+  const [voiceAiStatus, setVoiceAiStatus] = useState<'idle' | 'listening' | 'thinking' | 'speaking' | string>('idle');
   const [voiceHistory, setVoiceHistory] = useState<AIMessage[]>([]);
   const [micLevel, setMicLevel] = useState(0);
   const voiceAiOnRef = useRef(false);
-  const voiceAiStatusRef = useRef<'idle' | 'listening' | 'thinking' | 'speaking'>('idle');
+  const voiceAiStatusRef = useRef<'idle' | 'listening' | 'thinking' | 'speaking' | string>('idle');
 
   // Sync refs with state
   useEffect(() => { voiceAiOnRef.current = voiceAiOn; }, [voiceAiOn]);
   useEffect(() => { voiceAiStatusRef.current = voiceAiStatus; }, [voiceAiStatus]);
+
+  // Restart voice AI when language changes
+  useEffect(() => {
+    if (voiceAiOn && voiceAiStatus === 'listening') {
+      startVoiceAi();
+    }
+  }, [voiceLang]);
 
   const recognitionRef = useRef<any>(null);
   const silenceTimerRef = useRef<any>(null);
@@ -207,10 +216,14 @@ export default function AdvocatePortal({ onBack }: { onBack: () => void }) {
   const [downloadMessage, setDownloadMessage] = useState('Nexus Justice Smart Download Active.');
 
   const utteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
+  const sarvamAudioRef = useRef<HTMLAudioElement | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
   const micStreamRef = useRef<MediaStream | null>(null);
   const watchdogTimerRef = useRef<any>(null);
+  const sentenceQueueRef = useRef<string[]>([]);
+  const isSpeakingQueueRef = useRef(false);
+  const speechFinishedIntervalRef = useRef<any>(null);
 
   const startMicLevelMonitoring = async () => {
     try {
@@ -305,15 +318,58 @@ export default function AdvocatePortal({ onBack }: { onBack: () => void }) {
     const recognition = new SpeechRecognition();
     recognition.continuous = false; // Use false for better compatibility and more predictable onresult/onend
     recognition.interimResults = true;
-    recognition.lang = 'en-US';
+    recognition.lang = voiceLang;
 
     recognition.onstart = () => {
       console.log("Speech recognition started");
       setVoiceAiStatus('listening');
     };
 
+    recognition.onspeechstart = () => {
+      console.log("Speech started - potential barge-in");
+      if (voiceAiStatusRef.current === 'speaking' || voiceAiStatusRef.current === 'thinking') {
+        console.log("User barge-in detected (speechstart), stopping AI output");
+        window.speechSynthesis.cancel();
+        if (sarvamAudioRef.current) {
+          try { sarvamAudioRef.current.pause(); } catch(e) {}
+          sarvamAudioRef.current = null;
+        }
+        // Clear speech queue
+        sentenceQueueRef.current = [];
+        isSpeakingQueueRef.current = false;
+        if (speechFinishedIntervalRef.current) {
+          clearInterval(speechFinishedIntervalRef.current);
+          speechFinishedIntervalRef.current = null;
+        }
+        
+        setVoiceAiStatus('listening');
+        setVoiceAiReply("");
+      }
+    };
+
     recognition.onresult = (event: any) => {
       console.log("Speech recognition result received", event);
+      
+      // Barge-in logic: Stop AI speech if user starts talking
+      if (voiceAiStatusRef.current === 'speaking' || voiceAiStatusRef.current === 'thinking') {
+        console.log("User barge-in detected, stopping AI output");
+        window.speechSynthesis.cancel();
+        if (sarvamAudioRef.current) {
+          try { sarvamAudioRef.current.pause(); } catch(e) {}
+          sarvamAudioRef.current = null;
+        }
+        // Clear speech queue
+        sentenceQueueRef.current = [];
+        isSpeakingQueueRef.current = false;
+        if (speechFinishedIntervalRef.current) {
+          clearInterval(speechFinishedIntervalRef.current);
+          speechFinishedIntervalRef.current = null;
+        }
+        
+        setVoiceAiStatus('listening');
+        setVoiceAiReply("");
+      }
+
       // Only process if we are in listening mode
       if (voiceAiStatusRef.current !== 'listening') return;
 
@@ -343,7 +399,7 @@ export default function AdvocatePortal({ onBack }: { onBack: () => void }) {
           if (voiceAiStatusRef.current === 'listening') {
             processVoiceCommand(transcript.trim());
           }
-        }, 1000); 
+        }, 1200); 
       }
     };
 
@@ -421,6 +477,10 @@ export default function AdvocatePortal({ onBack }: { onBack: () => void }) {
       clearTimeout(watchdogTimerRef.current);
       watchdogTimerRef.current = null;
     }
+    if (sarvamAudioRef.current) {
+      sarvamAudioRef.current.pause();
+      sarvamAudioRef.current = null;
+    }
     if (silenceTimerRef.current) {
       clearTimeout(silenceTimerRef.current);
       silenceTimerRef.current = null;
@@ -451,7 +511,7 @@ export default function AdvocatePortal({ onBack }: { onBack: () => void }) {
         converterImage,
         'drafting'
       );
-      setConverterText(response);
+      setConverterText(response.text);
       setConverterStatus('done');
     } catch (err) {
       console.error(err);
@@ -505,7 +565,7 @@ export default function AdvocatePortal({ onBack }: { onBack: () => void }) {
         undefined,
         'drafting'
       );
-      setTranslatedText(response);
+      setTranslatedText(response.text);
     } catch (err) {
       console.error(err);
     } finally {
@@ -542,6 +602,15 @@ export default function AdvocatePortal({ onBack }: { onBack: () => void }) {
     setVoiceAiStatus('thinking');
     setVoiceAiReply("Thinking...");
     
+    // Automatically switch to Consult view as soon as a question is asked
+    setView('consult');
+    
+    // Add user message to history immediately
+    const userMsg: AIMessage = { role: 'user', content: text };
+    const updatedHistory = [...voiceHistory, userMsg];
+    setVoiceHistory(updatedHistory);
+    setChatHistory(updatedHistory);
+
     // Watchdog for AI response
     if (watchdogTimerRef.current) clearTimeout(watchdogTimerRef.current);
     watchdogTimerRef.current = setTimeout(() => {
@@ -554,17 +623,126 @@ export default function AdvocatePortal({ onBack }: { onBack: () => void }) {
     }, 15000);
 
     try {
-      const response = await aiEngine.generateResponse(text, voiceHistory, undefined, 'voice');
-      if (watchdogTimerRef.current) clearTimeout(watchdogTimerRef.current);
+      let fullText = "";
+      const stream = aiEngine.generateResponseStream(text, voiceHistory, 'voice');
+      
+      let currentSentence = "";
+      sentenceQueueRef.current = [];
+      isSpeakingQueueRef.current = false;
+
+      const playNextInQueue = async () => {
+        if (!voiceAiOnRef.current) return;
+        if (sentenceQueueRef.current.length === 0) {
+          isSpeakingQueueRef.current = false;
+          return;
+        }
+        isSpeakingQueueRef.current = true;
+        const nextSentence = sentenceQueueRef.current.shift()!;
+        await speakTextChunk(nextSentence);
+        playNextInQueue();
+      };
+
+      const speakTextChunk = async (chunk: string) => {
+        return new Promise<void>(async (resolve) => {
+          if (!voiceAiOnRef.current) {
+            resolve();
+            return;
+          }
+          const cleanChunk = chunk
+            .replace(/\*\*/g, '')
+            .replace(/\*/g, '')
+            .replace(/#/g, '')
+            .replace(/__/g, '')
+            .replace(/\[([^\]]+)\]\([^\)]+\)/g, '$1')
+            .trim();
+          
+          if (!cleanChunk) {
+            resolve();
+            return;
+          }
+
+          const isMalayalam = /[\u0D00-\u0D7F]/.test(cleanChunk);
+          if (isMalayalam) {
+            try {
+              const base64Audio = await aiEngine.generateSarvamTTS(cleanChunk);
+              if (base64Audio) {
+                const audio = new Audio(`data:audio/wav;base64,${base64Audio}`);
+                sarvamAudioRef.current = audio;
+                audio.onended = () => {
+                  sarvamAudioRef.current = null;
+                  resolve();
+                };
+                audio.onerror = () => {
+                  sarvamAudioRef.current = null;
+                  resolve();
+                };
+                audio.play();
+                return;
+              }
+            } catch (e) { console.error(e); }
+          }
+
+          // Fallback to browser TTS
+          const utterance = new SpeechSynthesisUtterance(cleanChunk);
+          utterance.lang = isMalayalam ? 'ml-IN' : 'en-US';
+          utterance.onend = () => resolve();
+          utterance.onerror = () => resolve();
+          window.speechSynthesis.speak(utterance);
+        });
+      };
+
+      for await (const chunk of stream) {
+        if (!voiceAiOnRef.current) break;
+        if (watchdogTimerRef.current) clearTimeout(watchdogTimerRef.current);
+        fullText += chunk;
+        setVoiceAiReply(fullText);
+        setVoiceAiStatus(`Answering (Gemma3n)...`);
+
+        currentSentence += chunk;
+        // Split by sentence endings: . ! ? or newline
+        if (/[.!?\n]/.test(chunk)) {
+          const parts = currentSentence.split(/([.!?\n])/);
+          // The last part might be an incomplete sentence
+          for (let i = 0; i < parts.length - 1; i += 2) {
+            const sentence = (parts[i] + (parts[i+1] || "")).trim();
+            if (sentence.length > 5) {
+              sentenceQueueRef.current.push(sentence);
+              if (!isSpeakingQueueRef.current) playNextInQueue();
+            }
+          }
+          currentSentence = parts[parts.length - 1] || "";
+        }
+      }
+
+      // Final sentence if any
+      if (currentSentence.trim() && voiceAiOnRef.current) {
+        sentenceQueueRef.current.push(currentSentence.trim());
+        if (!isSpeakingQueueRef.current) playNextInQueue();
+      }
+
       const newHistory: AIMessage[] = [
-        ...voiceHistory,
-        { role: 'user', content: text },
-        { role: 'assistant', content: response }
+        ...updatedHistory,
+        { role: 'assistant', content: fullText, model: "Gemma3n" }
       ];
-      // Keep only last 10 messages to avoid context bloat
       setVoiceHistory(newHistory.slice(-10));
-      setVoiceAiReply(response);
-      speakResponse(response);
+      setChatHistory(newHistory);
+      
+      // Wait for all speech to finish before restarting listener
+      if (speechFinishedIntervalRef.current) clearInterval(speechFinishedIntervalRef.current);
+      speechFinishedIntervalRef.current = setInterval(() => {
+        if (!isSpeakingQueueRef.current && !window.speechSynthesis.speaking && !sarvamAudioRef.current) {
+          clearInterval(speechFinishedIntervalRef.current);
+          speechFinishedIntervalRef.current = null;
+          if (voiceAiOnRef.current) {
+            setVoiceAiStatus('listening');
+            setVoiceAiTranscript("Listening...");
+            setTimeout(() => {
+              if (voiceAiOnRef.current) startVoiceAi();
+            }, 500);
+          }
+        }
+      }, 500);
+
     } catch (err) {
       if (watchdogTimerRef.current) clearTimeout(watchdogTimerRef.current);
       setVoiceAiReply("Error: Failed to connect to AI engine. Please check your connection.");
@@ -576,7 +754,12 @@ export default function AdvocatePortal({ onBack }: { onBack: () => void }) {
     }
   };
 
-  const speakResponse = (text: string) => {
+  const speakResponse = async (response: AIResponse) => {
+    const text = response.text;
+    const model = response.model;
+    
+    setVoiceAiStatus(`Answering (${model})...`);
+    
     if (text.startsWith("Error:")) {
       setVoiceAiStatus('idle');
       if (voiceAiOn) setTimeout(() => startVoiceAi(), 3000);
@@ -594,6 +777,46 @@ export default function AdvocatePortal({ onBack }: { onBack: () => void }) {
       .replace(/__/g, '')
       .replace(/\[([^\]]+)\]\([^\)]+\)/g, '$1');
 
+    // Detect if the text contains Malayalam characters
+    const isMalayalam = /[\u0D00-\u0D7F]/.test(cleanText);
+
+    // If Malayalam, try Sarvam TTS first
+    if (isMalayalam) {
+      try {
+        const base64Audio = await aiEngine.generateSarvamTTS(cleanText);
+        if (base64Audio) {
+          const audio = new Audio(`data:audio/wav;base64,${base64Audio}`);
+          sarvamAudioRef.current = audio;
+          audio.onended = () => {
+            console.log("Sarvam TTS ended");
+            sarvamAudioRef.current = null;
+            setVoiceAiStatus('listening');
+            setVoiceAiTranscript("Listening...");
+            if (voiceAiOnRef.current) {
+              setTimeout(() => {
+                if (voiceAiOnRef.current) startVoiceAi();
+              }, 500);
+            }
+          };
+          audio.onerror = (e) => {
+            console.error("Sarvam TTS error:", e);
+            sarvamAudioRef.current = null;
+            // Fallback to browser TTS if Sarvam fails
+            fallbackToBrowserTTS(cleanText, true);
+          };
+          audio.play();
+          return;
+        }
+      } catch (err) {
+        console.error("Failed to use Sarvam TTS:", err);
+      }
+    }
+
+    // Fallback to browser TTS
+    fallbackToBrowserTTS(cleanText, isMalayalam);
+  };
+
+  const fallbackToBrowserTTS = (cleanText: string, isMalayalam: boolean) => {
     const utterance = new SpeechSynthesisUtterance(cleanText);
     utteranceRef.current = utterance; // Keep reference to prevent GC
     utterance.rate = 1.0; 
@@ -602,11 +825,17 @@ export default function AdvocatePortal({ onBack }: { onBack: () => void }) {
     
     // Attempt to select a high-quality English voice
     const voices = window.speechSynthesis.getVoices();
-    const highQualityVoice = voices.find(v => (v.name.includes('Google') || v.name.includes('Premium') || v.name.includes('Natural')) && v.lang.startsWith('en')) 
-                           || voices.find(v => v.lang.startsWith('en'));
     
-    if (highQualityVoice) {
-      utterance.voice = highQualityVoice;
+    let selectedVoice = null;
+    if (isMalayalam) {
+      selectedVoice = voices.find(v => v.lang.startsWith('ml')) || voices.find(v => v.lang.startsWith('hi'));
+    } else {
+      selectedVoice = voices.find(v => (v.name.includes('Google') || v.name.includes('Premium') || v.name.includes('Natural')) && v.lang.startsWith('en')) 
+                      || voices.find(v => v.lang.startsWith('en'));
+    }
+    
+    if (selectedVoice) {
+      utterance.voice = selectedVoice;
     }
 
     utterance.onstart = () => {
@@ -780,7 +1009,9 @@ export default function AdvocatePortal({ onBack }: { onBack: () => void }) {
     const text = initialText || consoleInput.trim();
     if (!text || consoleLoading) return;
     if (!initialText) setConsoleInput("");
-    setChatHistory(prev => [...prev, { role: 'user', content: text }]);
+    
+    const userMsg: AIMessage = { role: 'user', content: text };
+    setChatHistory(prev => [...prev, userMsg]);
     setConsoleLoading(true);
     
     // Determine task type: Search if it starts with "search" or "find"
@@ -789,7 +1020,10 @@ export default function AdvocatePortal({ onBack }: { onBack: () => void }) {
 
     try {
       const response = await aiEngine.generateResponse(text, chatHistory, undefined, task);
-      setChatHistory(prev => [...prev, { role: 'assistant', content: response }]);
+      const assistantMsg: AIMessage = { role: 'assistant', content: response.text, model: response.model };
+      const newHistory = [...chatHistory, userMsg, assistantMsg];
+      setChatHistory(newHistory);
+      setVoiceHistory(newHistory.slice(-10));
     } catch (err) { console.error(err); } finally { setConsoleLoading(false); }
   };
 
@@ -865,7 +1099,7 @@ export default function AdvocatePortal({ onBack }: { onBack: () => void }) {
     const imageBase64 = canvasRef.current.toDataURL('image/jpeg');
     try {
       const response = await aiEngine.generateResponse("Extract text from this legal document. Provide only the text found.", [], imageBase64);
-      setScannedText(response);
+      setScannedText(response.text);
       setScanPhase('done');
       // Auto-read the extracted text
       speakResponse(response);
@@ -1081,7 +1315,7 @@ export default function AdvocatePortal({ onBack }: { onBack: () => void }) {
                               </button>
                             )}
                             <button 
-                              onClick={() => speakResponse("Audio test successful. Nexus Justice is ready to assist you.")}
+                              onClick={() => speakResponse({ text: "Audio test successful. Nexus Justice is ready to assist you.", model: "System" })}
                               className="px-4 py-3 bg-white/5 border border-white/10 rounded-xl font-black text-[10px] text-indigo-400 hover:bg-white/10 transition-all uppercase tracking-widest flex items-center gap-2"
                               title="Test Audio Output"
                             >
@@ -1089,6 +1323,28 @@ export default function AdvocatePortal({ onBack }: { onBack: () => void }) {
                               Test
                             </button>
                           </div>
+                        </div>
+                      </div>
+
+                      <div style={S.card} className="flex-1 flex flex-col overflow-hidden p-0">
+                        <div className="px-6 py-4 border-b border-white/5 flex justify-between items-center">
+                          <div className="text-[10px] font-black text-indigo-400 tracking-widest uppercase">Conversation History</div>
+                          <div className="text-[10px] font-black text-slate-500 uppercase">{voiceHistory.length} MESSAGES</div>
+                        </div>
+                        <div className="flex-1 overflow-y-auto p-6 space-y-4 custom-scrollbar">
+                          {voiceHistory.map((msg, i) => (
+                            <div key={i} className={`flex flex-col ${msg.role === 'user' ? 'items-end' : 'items-start'}`}>
+                              <div className={`max-w-[85%] p-4 rounded-2xl text-xs ${msg.role === 'user' ? 'bg-indigo-600 text-white' : 'bg-white/5 text-slate-300 border border-white/5'}`}>
+                                {msg.role === 'assistant' && (
+                                  <div className="flex items-center gap-2 mb-2">
+                                    <Cpu size={10} className="text-indigo-400" />
+                                    <span className="text-[8px] font-black text-indigo-400 tracking-widest uppercase">{msg.model || 'NEXUS AI'}</span>
+                                  </div>
+                                )}
+                                {msg.content}
+                              </div>
+                            </div>
+                          ))}
                         </div>
                       </div>
 
@@ -1162,6 +1418,84 @@ export default function AdvocatePortal({ onBack }: { onBack: () => void }) {
                         ))}
                       </div>
                     </div>
+                  </div>
+                </div>
+              </motion.div>
+            )}
+
+            {view === 'consult' && (
+              <motion.div key="consult" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="h-full flex flex-col overflow-hidden">
+                <div className="p-6 border-b border-white/5 flex justify-between items-center bg-[#070b14]">
+                  <div>
+                    <h2 className="text-3xl font-black italic text-slate-200">AI <span className="text-indigo-500">Consult</span></h2>
+                    <div className="text-[10px] font-black text-slate-500 tracking-widest uppercase mt-1">Legal Intelligence & Case Analysis</div>
+                  </div>
+                  <div className="flex items-center gap-4">
+                    <div className="flex items-center gap-2 px-3 py-1.5 bg-indigo-500/10 border border-indigo-500/20 rounded-full">
+                      <div className="w-1.5 h-1.5 rounded-full bg-indigo-500 animate-pulse" />
+                      <span className="text-[9px] font-black text-indigo-400 tracking-widest uppercase">Hybrid Engine Active</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex-1 overflow-y-auto p-6 space-y-6 custom-scrollbar">
+                  {chatHistory.length === 0 ? (
+                    <div className="h-full flex flex-col items-center justify-center text-center opacity-40">
+                      <div className="w-20 h-20 bg-indigo-500/10 rounded-full flex items-center justify-center mb-6 border border-indigo-500/20">
+                        <MessageSquare size={40} className="text-indigo-500" />
+                      </div>
+                      <h3 className="text-xl font-black italic text-slate-300 mb-2">No Active Consultation</h3>
+                      <p className="text-sm text-slate-500 max-w-xs">Ask a question or use voice commands to start a legal analysis session.</p>
+                    </div>
+                  ) : (
+                    chatHistory.map((msg, i) => (
+                      <motion.div 
+                        key={i} 
+                        initial={{ opacity: 0, y: 10 }} 
+                        animate={{ opacity: 1, y: 0 }}
+                        className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
+                      >
+                        <div className={`max-w-[80%] p-6 rounded-3xl border ${
+                          msg.role === 'user' 
+                            ? 'bg-indigo-600 border-indigo-500 text-white rounded-tr-none' 
+                            : 'bg-white/5 border-white/10 text-slate-200 rounded-tl-none'
+                        }`}>
+                          {msg.role === 'assistant' && (
+                            <div className="flex items-center gap-2 mb-3">
+                              <div className="w-5 h-5 bg-indigo-500 rounded-lg flex items-center justify-center">
+                                <Cpu size={12} className="text-white" />
+                              </div>
+                              <span className="text-[9px] font-black text-indigo-400 tracking-widest uppercase">
+                                {msg.model || 'NEXUS AI'}
+                              </span>
+                            </div>
+                          )}
+                          <div className="text-sm leading-relaxed whitespace-pre-wrap">{msg.content}</div>
+                          <div className="mt-4 text-[9px] font-black text-slate-500 uppercase tracking-widest">
+                            {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                          </div>
+                        </div>
+                      </motion.div>
+                    ))
+                  )}
+                </div>
+
+                <div className="p-6 bg-[#070b14] border-t border-white/5">
+                  <div className="max-w-4xl mx-auto relative">
+                    <input 
+                      value={consoleInput}
+                      onChange={(e) => setConsoleInput(e.target.value)}
+                      onKeyDown={(e) => e.key === 'Enter' && sendConsult()}
+                      placeholder="Ask the AI anything..."
+                      className="w-full bg-white/5 border border-white/10 rounded-2xl px-6 py-4 text-slate-200 outline-none focus:border-indigo-500/50 transition-all pr-16"
+                    />
+                    <button 
+                      onClick={() => sendConsult()}
+                      disabled={consoleLoading}
+                      className="absolute right-2 top-2 bottom-2 px-4 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl transition-all disabled:opacity-50"
+                    >
+                      {consoleLoading ? <RotateCcw size={18} className="animate-spin" /> : <Send size={18} />}
+                    </button>
                   </div>
                 </div>
               </motion.div>
@@ -1371,7 +1705,7 @@ export default function AdvocatePortal({ onBack }: { onBack: () => void }) {
                       {scanPhase === 'live' ? 'Capture & Read' : 'Start Camera'}
                     </button>
                     {scannedText && (
-                      <button onClick={() => speakResponse(scannedText)} className="p-4 bg-indigo-600 rounded-2xl">
+                      <button onClick={() => speakResponse({ text: scannedText, model: "OCR" })} className="p-4 bg-indigo-600 rounded-2xl">
                         <Volume2 size={24} />
                       </button>
                     )}
@@ -1894,11 +2228,25 @@ export default function AdvocatePortal({ onBack }: { onBack: () => void }) {
                   }`} />
                   <div className="text-[10px] font-black uppercase tracking-widest text-slate-400">
                     {voiceAiStatus === 'listening' ? 'Nexus Listening' : 
-                     voiceAiStatus === 'thinking' ? 'Nexus Thinking' : 
+                     voiceAiStatus === 'thinking' ? 'Nexus Processing' : 
                      voiceAiStatus === 'speaking' ? 'Nexus Speaking' : 'Nexus Ready'}
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
+                  <div className="flex bg-white/5 rounded-lg p-0.5 mr-2">
+                    <button 
+                      onClick={() => setVoiceLang('en-US')}
+                      className={`px-2 py-1 text-[8px] font-bold rounded-md transition-all ${voiceLang === 'en-US' ? 'bg-indigo-600 text-white' : 'text-slate-500 hover:text-slate-300'}`}
+                    >
+                      EN
+                    </button>
+                    <button 
+                      onClick={() => setVoiceLang('ml-IN')}
+                      className={`px-2 py-1 text-[8px] font-bold rounded-md transition-all ${voiceLang === 'ml-IN' ? 'bg-indigo-600 text-white' : 'text-slate-500 hover:text-slate-300'}`}
+                    >
+                      ML
+                    </button>
+                  </div>
                   {voiceAiStatus === 'speaking' && (
                     <div className="flex gap-0.5 items-end h-3 mr-2">
                       {[1, 2, 3, 4, 5].map(i => (
@@ -1934,30 +2282,22 @@ export default function AdvocatePortal({ onBack }: { onBack: () => void }) {
                 </div>
               </div>
               <div className="space-y-3">
-                <div className="flex items-center gap-3">
-                  <div className="text-sm font-medium text-white italic flex-1">
+                <div className="flex flex-col items-center gap-3">
+                  <VoiceVisualizer 
+                    volume={micLevel / 128} 
+                    isModelSpeaking={voiceAiStatus === 'speaking' || voiceAiStatus.includes('Answering')} 
+                    isThinking={voiceAiStatus === 'thinking'}
+                    isConnected={voiceAiOn} 
+                  />
+                  <div className="text-sm font-medium text-white italic text-center w-full">
                     {voiceAiStatus === 'listening' && voiceAiTranscript === "Listening..." ? "Speak now..." : `"${voiceAiTranscript}"`}
                   </div>
-                  {voiceAiStatus === 'listening' && (
-                    <div className="flex gap-1 items-center bg-red-500/10 px-2 py-1 rounded-full border border-red-500/20">
-                      <div className="text-[8px] font-black text-red-500 uppercase mr-1">
-                        {micLevel > 10 ? "Mic OK" : "Mic Active"}
-                      </div>
-                      <div className="w-12 h-1.5 bg-slate-800 rounded-full overflow-hidden flex items-center">
-                        <motion.div 
-                          initial={{ width: 0 }}
-                          animate={{ width: `${Math.min(100, (micLevel / 128) * 100)}%` }}
-                          className="h-full bg-red-500 shadow-[0_0_10px_rgba(239,68,68,0.5)]"
-                        />
-                      </div>
-                    </div>
-                  )}
                 </div>
                 {voiceAiReply && (
                   <div className="text-sm text-slate-400 leading-relaxed border-t border-white/5 pt-3 flex justify-between items-start gap-4">
                     <div className="flex-1">{voiceAiReply}</div>
                     <button 
-                      onClick={() => speakResponse(voiceAiReply)}
+                      onClick={() => speakResponse({ text: voiceAiReply, model: "NEXUS AI" })}
                       className="p-1.5 bg-white/5 rounded-lg text-slate-500 hover:text-white transition-colors"
                       title="Replay Audio"
                     >
