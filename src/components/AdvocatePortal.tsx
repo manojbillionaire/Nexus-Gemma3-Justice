@@ -6,12 +6,13 @@ import {
   ChevronLeft, ChevronRight, Play, Square, Copy, ExternalLink,
   CheckCircle, AlertTriangle, Info, X, Search, Plus, RotateCcw,
   Volume2, Send, Trash, Check, AlertCircle, LogOut, Upload, File,
-  Maximize2, Minimize2, Cpu
+  Maximize2, Minimize2, Cpu, Cloud, Zap
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import ReactMarkdown from 'react-markdown';
 import { VoiceVisualizer } from './VoiceVisualizer';
 import { HybridAIEngine, AIMessage, AIResponse } from "../lib/ai-engine";
+import { MalayalamEngine } from "../lib/malayalam-engine";
 import { LocalDB } from "../lib/local-db";
 import { jsPDF } from "jspdf";
 import { Document, Packer, Paragraph, TextRun } from "docx";
@@ -72,7 +73,7 @@ const sideNav = [
   { id: 'clients', label: 'Clients', icon: "M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z" },
   { id: 'knowledge', label: 'Knowledge', icon: "M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" },
   { id: 'instructions', label: 'Instructions', icon: "M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" },
-  { id: 'writing', label: 'Writing', icon: "M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" },
+  { id: 'drafting', label: 'Drafting', icon: "M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" },
   { id: 'notif', label: 'Notifications', icon: "M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" },
   { id: 'support', label: 'Support', icon: "M18.364 5.636l-3.536 3.536m0 5.656l3.536 3.536M9.172 9.172L5.636 5.636m3.536 9.192l-3.536 3.536M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-5 0a4 4 0 11-8 0 4 4 0 018 0z" },
   { id: 'read', label: 'Read', icon: "M15 12a3 3 0 11-6 0 3 3 0 016 0z" },
@@ -87,6 +88,7 @@ const topTabs = [
   { id: 'clients', label: 'CLIENTS' },
   { id: 'knowledge', label: 'KNOWLEDGE' },
   { id: 'instructions', label: 'INSTRUCTIONS' },
+  { id: 'drafting', label: 'DRAFTING' },
   { id: 'notif', label: 'NOTIF.' },
   { id: 'support', label: 'SUPPORT' },
   { id: 'read', label: 'READ' },
@@ -154,6 +156,26 @@ export default function AdvocatePortal({ onBack }: { onBack: () => void }) {
   const [isOffline, setIsOffline] = useState(!navigator.onLine);
   const [showOnboarding, setShowOnboarding] = useState(false);
 
+  // Connectivity Monitoring
+  useEffect(() => {
+    const handleOnline = () => {
+      setIsOffline(false);
+      setVoiceAiStatus("System Online");
+      setVoiceAiTranscript("Internet connection restored.");
+    };
+    const handleOffline = () => {
+      setIsOffline(true);
+      setVoiceAiStatus("Offline Mode");
+      setVoiceAiTranscript("Internet connection lost. Some features limited.");
+    };
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, []);
+
   // Doc Converter State
   const [converterImage, setConverterImage] = useState<string | null>(null);
   const [converterText, setConverterText] = useState('');
@@ -178,12 +200,20 @@ export default function AdvocatePortal({ onBack }: { onBack: () => void }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
 
-  const [draftPages] = useState(["IN THE COURT OF THE DISTRICT JUDGE...\n\n[Drafting starts here]"]);
+  const [draftPages, setDraftPages] = useState(["IN THE COURT OF THE DISTRICT JUDGE...\n\n[Drafting starts here]"]);
   const [deskInput, setDeskInput] = useState('');
   const [deskLoading, setDeskLoading] = useState(false);
   const [deskChatHistory, setDeskChatHistory] = useState<any[]>([
     { role: 'ai', text: "Welcome to the Writing Desk. I can help you draft petitions and plaints." }
   ]);
+
+  const [draftFacts, setDraftFacts] = useState('');
+  const [draftModel, setDraftModel] = useState('');
+  const [draftSuggestions, setDraftSuggestions] = useState('');
+  const [isDrafting, setIsDrafting] = useState(false);
+  const [enlargedElement, setEnlargedElement] = useState<'facts' | 'model' | 'pad' | null>(null);
+  const enlargedElementRef = useRef(enlargedElement);
+  useEffect(() => { enlargedElementRef.current = enlargedElement; }, [enlargedElement]);
 
   const [voiceAiOn, setVoiceAiOn] = useState(false);
   const [voiceLang, setVoiceLang] = useState<'en-US' | 'ml-IN'>('en-US');
@@ -209,11 +239,21 @@ export default function AdvocatePortal({ onBack }: { onBack: () => void }) {
   const recognitionRef = useRef<any>(null);
   const silenceTimerRef = useRef<any>(null);
 
-  // Gemma3n Download State
-  const [downloadProgress, setDownloadProgress] = useState(18);
+  // Gemma3-1B-it Download State
+  const [downloadProgress, setDownloadProgress] = useState(0);
   const [isDownloading, setIsDownloading] = useState(false);
-  const [downloadSlice, setDownloadSlice] = useState(0); // 0: none, 1: day 1, 2: day 2
+  const [downloadSlice, setDownloadSlice] = useState(0); // 0: none, 1: complete
   const [downloadMessage, setDownloadMessage] = useState('Nexus Justice Smart Download Active.');
+
+  // Malayalam Model States
+  const [malayalamStatus, setMalayalamStatus] = useState({
+    ttsReady: false,
+    sttReady: false,
+    ttsProgress: 0,
+    sttProgress: 0,
+    isTTSLoading: false,
+    isSTTLoading: false
+  });
 
   const utteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
   const sarvamAudioRef = useRef<HTMLAudioElement | null>(null);
@@ -276,7 +316,41 @@ export default function AdvocatePortal({ onBack }: { onBack: () => void }) {
     }, 10000);
   };
 
+  const startLocalMalayalamSTT = async () => {
+    setVoiceAiOn(true);
+    setVoiceAiStatus('listening');
+    setVoiceAiTranscript("Local STT Active (Malayalam)...");
+    
+    try {
+      const audio = await MalayalamEngine.getInstance().recordAudio(5000);
+      if (audio && voiceAiOnRef.current) {
+        setVoiceAiStatus('thinking');
+        const text = await MalayalamEngine.getInstance().transcribe(audio);
+        if (text && voiceAiOnRef.current) {
+          setVoiceAiTranscript(text);
+          processVoiceCommand(text);
+        } else if (voiceAiOnRef.current) {
+          startLocalMalayalamSTT(); // Restart if no text
+        }
+      }
+    } catch (err) {
+      console.error("Local STT Error:", err);
+      setVoiceAiOn(false);
+    }
+  };
+
   const startVoiceAi = async () => {
+    if (!navigator.onLine) {
+      if (voiceLang === 'ml-IN' && malayalamStatus.sttReady) {
+        startLocalMalayalamSTT();
+        return;
+      }
+      setVoiceAiStatus("Offline: STT requires internet.");
+      setVoiceAiTranscript("Voice recognition is currently unavailable offline.");
+      setVoiceAiOn(false);
+      return;
+    }
+
     const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (!SpeechRecognition) {
       alert("Speech recognition not supported in this browser. Please use Chrome or Edge.");
@@ -583,6 +657,18 @@ export default function AdvocatePortal({ onBack }: { onBack: () => void }) {
       }
       return;
     }
+
+    // Dictation mode for drafting facts
+    if (enlargedElementRef.current === 'facts') {
+      setDraftFacts(prev => prev + (prev.trim() ? " " : "") + text);
+      setVoiceAiStatus('listening');
+      if (voiceAiOnRef.current) {
+        setTimeout(() => {
+          try { if (recognitionRef.current) recognitionRef.current.start(); } catch(e) {}
+        }, 100);
+      }
+      return;
+    }
     
     // Stop recognition while AI is thinking/speaking to avoid echo
     if (recognitionRef.current) {
@@ -591,8 +677,8 @@ export default function AdvocatePortal({ onBack }: { onBack: () => void }) {
     
     if (downloadProgress < 100) {
       const msg = isDownloading 
-        ? `Gemma 3n brain is currently downloading (${downloadProgress}%). Please wait a moment.`
-        : "Error: Gemma 3n brain not fully deployed. Please complete the download in the 'BRAIN' tab.";
+        ? `Gemma3-1B-it brain is currently downloading (${downloadProgress}%). Please wait a moment.`
+        : "Error: Gemma3-1B-it brain not fully deployed. Please complete the download in the 'BRAIN' tab.";
       setVoiceAiReply(msg);
       setVoiceAiStatus('idle');
       if (voiceAiOnRef.current) setTimeout(() => startVoiceAi(), 3000);
@@ -666,6 +752,7 @@ export default function AdvocatePortal({ onBack }: { onBack: () => void }) {
             try {
               const base64Audio = await aiEngine.generateSarvamTTS(cleanChunk);
               if (base64Audio) {
+                setVoiceAiStatus('Speaking (Sarvam Bulbul)...');
                 const audio = new Audio(`data:audio/wav;base64,${base64Audio}`);
                 sarvamAudioRef.current = audio;
                 audio.onended = () => {
@@ -683,8 +770,21 @@ export default function AdvocatePortal({ onBack }: { onBack: () => void }) {
           }
 
           // Fallback to browser TTS
+          setVoiceAiStatus(`Speaking (Browser ${isMalayalam ? 'Malayalam' : 'English'})...`);
           const utterance = new SpeechSynthesisUtterance(cleanChunk);
           utterance.lang = isMalayalam ? 'ml-IN' : 'en-US';
+          
+          // Explicitly select a native voice for Malayalam fallback
+          const voices = window.speechSynthesis.getVoices();
+          let selectedVoice = null;
+          if (isMalayalam) {
+            selectedVoice = voices.find(v => v.lang.startsWith('ml')) || voices.find(v => v.lang.startsWith('hi'));
+          } else {
+            selectedVoice = voices.find(v => (v.name.includes('Google') || v.name.includes('Premium') || v.name.includes('Natural')) && v.lang.startsWith('en')) 
+                            || voices.find(v => v.lang.startsWith('en'));
+          }
+          if (selectedVoice) utterance.voice = selectedVoice;
+
           utterance.onend = () => resolve();
           utterance.onerror = () => resolve();
           window.speechSynthesis.speak(utterance);
@@ -696,7 +796,7 @@ export default function AdvocatePortal({ onBack }: { onBack: () => void }) {
         if (watchdogTimerRef.current) clearTimeout(watchdogTimerRef.current);
         fullText += chunk;
         setVoiceAiReply(fullText);
-        setVoiceAiStatus(`Answering (Gemma3n)...`);
+        setVoiceAiStatus(`Answering (Gemma3-1B-it)...`);
 
         currentSentence += chunk;
         // Split by sentence endings: . ! ? or newline
@@ -722,7 +822,7 @@ export default function AdvocatePortal({ onBack }: { onBack: () => void }) {
 
       const newHistory: AIMessage[] = [
         ...updatedHistory,
-        { role: 'assistant', content: fullText, model: "Gemma3n" }
+        { role: 'assistant', content: fullText, model: "Gemma3-1B-it" }
       ];
       setVoiceHistory(newHistory.slice(-10));
       setChatHistory(newHistory);
@@ -779,6 +879,32 @@ export default function AdvocatePortal({ onBack }: { onBack: () => void }) {
 
     // Detect if the text contains Malayalam characters
     const isMalayalam = /[\u0D00-\u0D7F]/.test(cleanText);
+
+    // If Malayalam, try local Malayalam TTS first
+    if (isMalayalam && malayalamStatus.ttsReady) {
+      try {
+        const audioBuffer = await MalayalamEngine.getInstance().speak(cleanText);
+        if (audioBuffer) {
+          if (!audioContextRef.current) audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
+          const source = audioContextRef.current.createBufferSource();
+          source.buffer = audioBuffer;
+          source.connect(audioContextRef.current.destination);
+          source.onended = () => {
+            setVoiceAiStatus('listening');
+            setVoiceAiTranscript("Listening...");
+            if (voiceAiOnRef.current) {
+              setTimeout(() => {
+                if (voiceAiOnRef.current) startVoiceAi();
+              }, 500);
+            }
+          };
+          source.start();
+          return;
+        }
+      } catch (err) {
+        console.error("Local Malayalam TTS Error:", err);
+      }
+    }
 
     // If Malayalam, try Sarvam TTS first
     if (isMalayalam) {
@@ -926,61 +1052,45 @@ export default function AdvocatePortal({ onBack }: { onBack: () => void }) {
     }
   }, []);
 
-  const handleDownloadGemma3n = async (manualSliceIndex?: number) => {
+  const handleDownloadGemma3 = async () => {
     setIsDownloading(true);
-    setDownloadMessage(manualSliceIndex ? `Manual Override: Downloading Slice ${manualSliceIndex}...` : "Initializing Nexus Justice Smart Download...");
+    setDownloadMessage("Initializing Nexus Justice Local Brain (Transformers.js)...");
 
-    // Simulate connection check delay
-    await new Promise(r => setTimeout(r, 1000));
-
-    const isWifi = connectionType === 'wifi' || connectionType === 'unknown';
-    const isMobile = connectionType === 'mobile';
-
-    if (isWifi && !manualSliceIndex) {
-      setDownloadMessage("🚀 Wi-Fi / Broadband detected. Initializing full model download (5.2 GB)...");
-      await new Promise(r => setTimeout(r, 1500));
-      setDownloadMessage("📥 Downloading Gemma 3n E2B-IT... (High Speed)");
-      for (let i = downloadProgress; i <= 100; i += 1) {
-        setDownloadProgress(i);
-        await new Promise(r => setTimeout(r, 400)); // Slower for realism (approx 40s total)
-      }
-      setDownloadMessage("🔍 Verifying model integrity...");
-      await new Promise(r => setTimeout(r, 2000));
-      setDownloadMessage("✅ Success! Gemma 3n E2B-IT ready.");
-      setDownloadSlice(6); // Mark all slices as complete
-    } else {
-      const targetSlice = manualSliceIndex || downloadSlice + 1;
-      const sliceThresholds = [0, 17, 34, 51, 67, 84, 100];
-      const targetProgress = sliceThresholds[targetSlice];
-
-      if (manualSliceIndex) {
-        setDownloadMessage(`📡 Manual Download: Slice ${manualSliceIndex} (${manualSliceIndex === 6 ? '825MB' : '900MB'})...`);
+    const engine = HybridAIEngine.getInstance();
+    await engine.loadLocalModel((progress) => {
+      setDownloadProgress(progress);
+      if (progress < 100) {
+        setDownloadMessage(`📥 Downloading & Loading Gemma3-1B-it... ${progress}%`);
       } else {
-        setDownloadMessage(`📡 Mobile Data: Downloading Slice ${targetSlice} (900MB)...`);
+        setDownloadMessage("🔍 Optimizing local inference engine...");
       }
+    });
 
-      await new Promise(r => setTimeout(r, 1000));
-      
-      for (let i = downloadProgress; i <= targetProgress; i += 1) {
-        setDownloadProgress(i);
-        await new Promise(r => setTimeout(r, 150));
-      }
-
-      setDownloadSlice(targetSlice);
-      
-      if (targetSlice < 6) {
-        setDownloadMessage(manualSliceIndex ? `✅ Manual Slice ${manualSliceIndex} Complete.` : "🛑 Daily 900MB limit reached. Next slice tomorrow at 10:00 AM.");
-      } else {
-        setDownloadMessage("✅ All parts downloaded! Gemma 3n ready.");
-      }
-    }
-    
+    setDownloadMessage("✅ Success! Gemma3-1B-it is now running locally.");
+    setDownloadSlice(1); // Mark as complete
     setIsDownloading(false);
+    setAiStatus(engine.getStatus());
+  };
+
+  const handleDownloadMalayalamTTS = async () => {
+    const engine = MalayalamEngine.getInstance();
+    await engine.loadTTS((progress) => {
+      setMalayalamStatus(prev => ({ ...prev, ttsProgress: progress, isTTSLoading: progress < 100 }));
+    });
+    setMalayalamStatus(engine.getStatus());
+  };
+
+  const handleDownloadMalayalamSTT = async () => {
+    const engine = MalayalamEngine.getInstance();
+    await engine.loadSTT((progress) => {
+      setMalayalamStatus(prev => ({ ...prev, sttProgress: progress, isSTTLoading: progress < 100 }));
+    });
+    setMalayalamStatus(engine.getStatus());
   };
 
   useEffect(() => {
     if (connectionType === 'wifi' && downloadProgress < 100 && !isDownloading) {
-      handleDownloadGemma3n();
+      handleDownloadGemma3();
     }
   }, [connectionType, downloadProgress, isDownloading]);
 
@@ -1001,6 +1111,7 @@ export default function AdvocatePortal({ onBack }: { onBack: () => void }) {
         setClients(initial);
       }
       setAiStatus(aiEngine.getStatus());
+      setMalayalamStatus(MalayalamEngine.getInstance().getStatus());
     };
     init();
   }, []);
@@ -1027,6 +1138,58 @@ export default function AdvocatePortal({ onBack }: { onBack: () => void }) {
     } catch (err) { console.error(err); } finally { setConsoleLoading(false); }
   };
 
+  const handleCopy = (text: string) => {
+    navigator.clipboard.writeText(text);
+  };
+
+  const handleDownloadMessage = (text: string) => {
+    const blob = new Blob([text], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `nexus_answer_${new Date().getTime()}.txt`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const handleDeleteMessage = (index: number) => {
+    setChatHistory(prev => prev.filter((_, i) => i !== index));
+  };
+
+  const handleAIDrafting = async () => {
+    if (!draftFacts.trim() || isDrafting) return;
+    setIsDrafting(true);
+    try {
+      const prompt = `Based on the following facts of the case:
+${draftFacts}
+
+${draftModel ? `And using this model/template as a guide:
+${draftModel}` : ''}
+
+Please draft a formal legal document suitable for submission before a court. 
+Maintain a professional legal tone, use appropriate legal terminology, and follow standard court formatting.`;
+
+      const response = await aiEngine.generateResponse(prompt, [], undefined, 'drafting');
+      setDraftPages([response.text]);
+
+      // Get suggestions
+      const suggestionPrompt = `Review the following legal draft and provide 3-5 specific suggestions for improvement or additional points to consider. Provide the suggestions as a bulleted list. Draft to review:
+${response.text}`;
+      const suggestions = await aiEngine.generateResponse(suggestionPrompt, [], undefined, 'drafting');
+      setDraftSuggestions(suggestions.text);
+
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setIsDrafting(false);
+    }
+  };
+
+  const handleDownloadDraft = (text: string) => {
+    const blob = new Blob([text], { type: 'text/plain' });
+    saveAs(blob, `Nexus_Draft_${new Date().getTime()}.txt`);
+  };
+
   const sendDeskChat = async () => {
     if (!deskInput.trim() || deskLoading) return;
     const text = deskInput.trim();
@@ -1049,10 +1212,10 @@ export default function AdvocatePortal({ onBack }: { onBack: () => void }) {
       transcript: [],
       summary: "Incoming Call..."
     });
-    if (autoAnswerEnabled) setTimeout(() => handleAutoAnswer(), 2000);
   };
 
   const handleAutoAnswer = async () => {
+    if (!incomingCall) return;
     setIsAnswering(true);
     
     // Check for specific instructions
@@ -1061,24 +1224,57 @@ export default function AdvocatePortal({ onBack }: { onBack: () => void }) {
       callerName.toLowerCase().includes(i.caller.toLowerCase())
     );
 
-    const greeting = instruction 
-      ? `Hello, this is the Nexus Justice AI assistant. Regarding your call, ${instruction.instruction}.`
-      : `Hello, this is the Nexus Justice AI assistant for ${callerName || 'your call'}. How can I assist you today?`;
+    const isMalayalam = voiceLang === 'ml-IN';
+    let greeting = "";
     
-    const utterance = new SpeechSynthesisUtterance(greeting);
-    const voices = window.speechSynthesis.getVoices();
-    const voice = voices.find(v => v.lang.startsWith('en'));
-    if (voice) utterance.voice = voice;
-
-    window.speechSynthesis.speak(utterance);
+    if (isMalayalam) {
+      greeting = instruction 
+        ? `നമസ്കാരം, ഇത് നെക്സസ് ജസ്റ്റിസ് AI അസിസ്റ്റന്റ് ആണ്. നിങ്ങളുടെ കോളിനെക്കുറിച്ച്, ${instruction.instruction}.`
+        : `നമസ്കാരം, ${callerName || 'നിങ്ങളുടെ'} കോളിനായി നെക്സസ് ജസ്റ്റിസ് AI അസിസ്റ്റന്റ് സംസാരിക്കുന്നു. ഞാൻ എങ്ങനെ സഹായിക്കണം?`;
+    } else {
+      greeting = instruction 
+        ? `Hello, this is the Nexus Justice AI assistant. Regarding your call, ${instruction.instruction}.`
+        : `Hello, this is the Nexus Justice AI assistant for ${callerName || 'your call'}. How can I assist you today?`;
+    }
+    
+    // Use local Malayalam TTS if ready
+    if (isMalayalam && malayalamStatus.ttsReady) {
+      try {
+        const audioBuffer = await MalayalamEngine.getInstance().speak(greeting);
+        if (audioBuffer) {
+          if (!audioContextRef.current) audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
+          const source = audioContextRef.current.createBufferSource();
+          source.buffer = audioBuffer;
+          source.connect(audioContextRef.current.destination);
+          source.start();
+        }
+      } catch (err) {
+        console.error("Auto-answer Malayalam TTS Error:", err);
+      }
+    } else {
+      const utterance = new SpeechSynthesisUtterance(greeting);
+      const voices = window.speechSynthesis.getVoices();
+      const voice = voices.find(v => isMalayalam ? v.lang.startsWith('ml') : v.lang.startsWith('en'));
+      if (voice) utterance.voice = voice;
+      window.speechSynthesis.speak(utterance);
+    }
 
     setTimeout(() => {
       setIncomingCall(null);
       setIsAnswering(false);
-      // Optionally start Voice AI session after answering
+      // Automatically start Voice AI session after answering to continue the conversation
       startVoiceAi();
     }, 5000);
   };
+
+  useEffect(() => {
+    if (incomingCall && autoAnswerEnabled && !isAnswering) {
+      const timer = setTimeout(() => {
+        handleAutoAnswer();
+      }, 2000);
+      return () => clearTimeout(timer);
+    }
+  }, [incomingCall, autoAnswerEnabled, isAnswering]);
 
   const startScan = async () => {
     try {
@@ -1147,9 +1343,15 @@ export default function AdvocatePortal({ onBack }: { onBack: () => void }) {
             </h1>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            <div className="bg-emerald-500/10 text-emerald-400 px-4 py-1.5 rounded-full text-[10px] font-black tracking-widest flex items-center gap-2 border border-emerald-500/20">
-              <Wifi size={12} /> CLOUD ACTIVE
-            </div>
+            {isOffline ? (
+              <div className="bg-red-500/10 text-red-400 px-4 py-1.5 rounded-full text-[10px] font-black tracking-widest flex items-center gap-2 border border-red-500/20 animate-pulse">
+                <WifiOff size={12} /> OFFLINE MODE
+              </div>
+            ) : (
+              <div className="bg-emerald-500/10 text-emerald-400 px-4 py-1.5 rounded-full text-[10px] font-black tracking-widest flex items-center gap-2 border border-emerald-500/20">
+                <Wifi size={12} /> CLOUD ACTIVE
+              </div>
+            )}
             <div className="bg-indigo-500/10 text-indigo-400 px-4 py-1.5 rounded-full text-[10px] font-black tracking-widest flex items-center gap-2 border border-indigo-500/20">
               <div className="w-2 h-2 rounded-full bg-indigo-500" /> SARVAM 30B ACTIVE
             </div>
@@ -1197,7 +1399,7 @@ export default function AdvocatePortal({ onBack }: { onBack: () => void }) {
                             {voiceAiOn ? 'Stop' : 'Start'}
                           </button>
                           <button 
-                            onClick={() => handleDownloadGemma3n()}
+                            onClick={() => handleDownloadGemma3()}
                             disabled={isDownloading || downloadProgress === 100}
                             className="flex-1 py-3 bg-white/5 border border-white/10 rounded-xl font-black text-sm text-slate-300 disabled:opacity-50"
                           >
@@ -1269,7 +1471,7 @@ export default function AdvocatePortal({ onBack }: { onBack: () => void }) {
                         </div>
                       </div>
 
-                      {/* Gemma3n Model Management */}
+                      {/* Gemma3-1B-it Model Management */}
                       <div className="bg-white/5 border border-white/5 rounded-3xl p-6 mb-6">
                         <div className="flex justify-between items-center mb-4">
                           <div className="text-[10px] font-black text-indigo-400 tracking-widest uppercase">Model Management</div>
@@ -1281,9 +1483,9 @@ export default function AdvocatePortal({ onBack }: { onBack: () => void }) {
 
                         <div className="space-y-4">
                           <div className="flex items-center justify-between">
-                            <div className="text-xs font-bold text-slate-200">Gemma3n</div>
+                            <div className="text-xs font-bold text-slate-200">Gemma3-1B-it</div>
                             <div className="text-[10px] text-slate-500 font-medium">
-                              {downloadSlice === 2 ? 'Downloaded' : downloadSlice === 1 ? 'Slice 1 Complete' : 'Not Downloaded'}
+                              {downloadProgress === 100 ? 'Downloaded' : 'Not Downloaded'}
                             </div>
                           </div>
 
@@ -1305,13 +1507,13 @@ export default function AdvocatePortal({ onBack }: { onBack: () => void }) {
                           )}
 
                           <div className="flex gap-2">
-                            {downloadSlice < 6 && (
+                            {downloadProgress < 100 && (
                               <button 
-                                onClick={() => handleDownloadGemma3n()}
+                                onClick={() => handleDownloadGemma3()}
                                 disabled={isDownloading}
                                 className="flex-1 py-3 bg-indigo-500/10 hover:bg-indigo-500/20 border border-indigo-500/30 text-indigo-400 rounded-xl font-black text-[10px] uppercase tracking-widest transition-all"
                               >
-                                {isDownloading ? 'Downloading...' : downloadSlice >= 1 ? `Resume Day ${downloadSlice + 1} Download` : 'Download Gemma3n'}
+                                {isDownloading ? 'Downloading...' : 'Download Gemma3-1B-it'}
                               </button>
                             )}
                             <button 
@@ -1471,8 +1673,39 @@ export default function AdvocatePortal({ onBack }: { onBack: () => void }) {
                             </div>
                           )}
                           <div className="text-sm leading-relaxed whitespace-pre-wrap">{msg.content}</div>
-                          <div className="mt-4 text-[9px] font-black text-slate-500 uppercase tracking-widest">
-                            {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                          
+                          <div className="mt-4 flex items-center justify-between">
+                            <div className="text-[9px] font-black text-slate-500 uppercase tracking-widest">
+                              {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                            </div>
+                            
+                            <div className="flex items-center gap-2">
+                              {msg.role === 'assistant' && (
+                                <>
+                                  <button 
+                                    onClick={() => handleCopy(msg.content)}
+                                    className="text-slate-500 hover:text-indigo-400 transition-all p-1.5 hover:bg-white/5 rounded-lg"
+                                    title="Copy Answer"
+                                  >
+                                    <Copy size={13} />
+                                  </button>
+                                  <button 
+                                    onClick={() => handleDownloadMessage(msg.content)}
+                                    className="text-slate-500 hover:text-indigo-400 transition-all p-1.5 hover:bg-white/5 rounded-lg"
+                                    title="Download Answer"
+                                  >
+                                    <Download size={13} />
+                                  </button>
+                                </>
+                              )}
+                              <button 
+                                onClick={() => handleDeleteMessage(i)}
+                                className={`${msg.role === 'user' ? 'text-white/40 hover:text-white' : 'text-slate-500 hover:text-red-400'} transition-all p-1.5 hover:bg-white/5 rounded-lg`}
+                                title="Delete Message"
+                              >
+                                <Trash2 size={13} />
+                              </button>
+                            </div>
                           </div>
                         </div>
                       </motion.div>
@@ -1604,36 +1837,99 @@ export default function AdvocatePortal({ onBack }: { onBack: () => void }) {
               </motion.div>
             )}
 
-            {view === 'writing' && (
-              <motion.div key="writing" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="h-full flex overflow-hidden">
+            {view === 'drafting' && (
+              <motion.div key="drafting" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="h-full flex overflow-hidden">
+                {/* Left Panel: Inputs */}
+                <div className="w-80 flex flex-col border-r border-white/5 bg-[#070b14]">
+                  <div className="p-6 border-b border-white/5">
+                    <div className="text-[10px] font-black text-indigo-500 tracking-widest uppercase">CASE INPUTS</div>
+                  </div>
+                  <div className="flex-1 overflow-y-auto p-6 space-y-6 custom-scrollbar">
+                    <div>
+                      <div className="flex justify-between items-center mb-2">
+                        <label className="text-[9px] font-black text-slate-500 uppercase tracking-widest block">Fact of the Case</label>
+                        <button onClick={() => setEnlargedElement('facts')} className="p-1 text-slate-500 hover:text-indigo-400 transition-colors" title="Enlarge">
+                          <Maximize2 size={12} />
+                        </button>
+                      </div>
+                      <textarea 
+                        value={draftFacts} 
+                        onChange={e => setDraftFacts(e.target.value)}
+                        placeholder="Enter the facts of the case here..."
+                        className="w-full h-48 bg-white/5 border border-white/10 rounded-xl p-3 text-xs text-slate-300 focus:border-indigo-500 transition-colors resize-none custom-scrollbar"
+                      />
+                    </div>
+                    <div>
+                      <div className="flex justify-between items-center mb-2">
+                        <label className="text-[9px] font-black text-slate-500 uppercase tracking-widest block">Model Draft / Template</label>
+                        <button onClick={() => setEnlargedElement('model')} className="p-1 text-slate-500 hover:text-indigo-400 transition-colors" title="Enlarge">
+                          <Maximize2 size={12} />
+                        </button>
+                      </div>
+                      <textarea 
+                        value={draftModel} 
+                        onChange={e => setDraftModel(e.target.value)}
+                        placeholder="Upload or paste a model draft..."
+                        className="w-full h-48 bg-white/5 border border-white/10 rounded-xl p-3 text-xs text-slate-300 focus:border-indigo-500 transition-colors resize-none custom-scrollbar"
+                      />
+                    </div>
+                    <button 
+                      onClick={handleAIDrafting}
+                      disabled={isDrafting || !draftFacts.trim()}
+                      className="w-full py-3 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 rounded-xl font-black text-[10px] text-white uppercase tracking-widest transition-all flex items-center justify-center gap-2"
+                    >
+                      {isDrafting ? <RotateCcw size={14} className="animate-spin" /> : <Zap size={14} />}
+                      {isDrafting ? "GENERATING..." : "GENERATE DRAFT"}
+                    </button>
+                  </div>
+                </div>
+
+                {/* Middle Panel: Writing Pad */}
                 <div className="flex-1 flex flex-col border-r border-white/5">
                   <div className="h-12 bg-white/5 border-b border-white/5 flex items-center justify-between px-6">
-                    <div className="text-[10px] font-black text-indigo-400 tracking-widest uppercase">DRAFTING AREA</div>
+                    <div className="text-[10px] font-black text-indigo-400 tracking-widest uppercase">TEMPORARY WRITING PAD</div>
                     <div className="flex gap-2">
-                      <button className="p-1.5 text-slate-500 hover:text-white transition-colors"><Save size={16} /></button>
-                      <button className="p-1.5 text-slate-500 hover:text-white transition-colors"><Download size={16} /></button>
+                      <button onClick={() => setEnlargedElement('pad')} className="p-1.5 text-slate-500 hover:text-indigo-400 transition-colors" title="Enlarge"><Maximize2 size={16} /></button>
+                      <button onClick={() => handleCopy(draftPages[0])} className="p-1.5 text-slate-500 hover:text-white transition-colors" title="Copy"><Copy size={16} /></button>
+                      <button onClick={() => handleDownloadDraft(draftPages[0])} className="p-1.5 text-slate-500 hover:text-white transition-colors" title="Download"><Download size={16} /></button>
                     </div>
                   </div>
-                  <div className="flex-1 p-10 bg-black/20 overflow-y-auto">
-                    <div className="max-w-2xl mx-auto bg-white/5 p-12 rounded-lg shadow-2xl min-h-full font-serif text-slate-300 leading-relaxed whitespace-pre-wrap">
+                  <div className="flex-1 p-10 bg-black/20 overflow-y-auto custom-scrollbar">
+                    <div className="max-w-2xl mx-auto bg-white/5 p-12 rounded-lg shadow-2xl min-h-full font-serif text-slate-300 leading-relaxed whitespace-pre-wrap outline-none" contentEditable suppressContentEditableWarning onBlur={(e) => setDraftPages([e.currentTarget.innerText])}>
                       {draftPages[0]}
                     </div>
                   </div>
                 </div>
+
+                {/* Right Panel: Suggestions & Chat */}
                 <div className="w-80 flex flex-col bg-[#070b14]">
                   <div className="p-6 border-b border-white/5">
-                    <div className="text-[10px] font-black text-indigo-500 tracking-widest uppercase">AI DRAFTING ASSISTANT</div>
+                    <div className="text-[10px] font-black text-emerald-500 tracking-widest uppercase">AI SUGGESTIONS</div>
                   </div>
-                  <div className="flex-1 overflow-y-auto p-6 space-y-4">
-                    {deskChatHistory.map((msg, i) => (
-                      <div key={i} className={`p-4 rounded-2xl text-xs leading-relaxed ${msg.role === 'ai' ? 'bg-white/5 border border-white/10' : 'bg-indigo-600/20 border border-indigo-600/30'}`}>
-                        {msg.text}
+                  <div className="flex-1 overflow-y-auto p-6 space-y-6 custom-scrollbar">
+                    {draftSuggestions && (
+                      <div className="bg-emerald-500/5 border border-emerald-500/10 rounded-2xl p-4">
+                        <div className="text-[9px] font-black text-emerald-500 uppercase tracking-widest mb-3 flex items-center gap-2">
+                          <Info size={12} /> Improvement Points
+                        </div>
+                        <div className="text-[11px] text-slate-300 leading-relaxed">
+                          <ReactMarkdown>{draftSuggestions}</ReactMarkdown>
+                        </div>
                       </div>
-                    ))}
+                    )}
+
+                    <div className="space-y-4">
+                      <div className="text-[10px] font-black text-slate-500 tracking-widest uppercase">CHAT ASSISTANT</div>
+                      {deskChatHistory.map((msg, i) => (
+                        <div key={i} className={`p-4 rounded-2xl text-xs leading-relaxed ${msg.role === 'ai' ? 'bg-white/5 border border-white/10' : 'bg-indigo-600/20 border border-indigo-600/30'}`}>
+                          {msg.text}
+                        </div>
+                      ))}
+                    </div>
                   </div>
                   <div className="p-6 border-t border-white/5">
                     <div className="flex gap-2">
-                      <input value={deskInput} onChange={e => setDeskInput(e.target.value)} onKeyDown={e => e.key === 'Enter' && sendDeskChat()} placeholder="Ask AI to draft..." className="flex-1 bg-white/5 border border-white/10 rounded-xl px-4 py-2 text-xs" />
+                      <input value={deskInput} onChange={e => setDeskInput(e.target.value)} onKeyDown={e => e.key === 'Enter' && sendDeskChat()} placeholder="Refine draft..." className="flex-1 bg-white/5 border border-white/10 rounded-xl px-4 py-2 text-xs" />
                       <button onClick={sendDeskChat} className="bg-indigo-600 p-2 rounded-xl"><Send size={14} /></button>
                     </div>
                   </div>
@@ -1709,6 +2005,19 @@ export default function AdvocatePortal({ onBack }: { onBack: () => void }) {
                         <Volume2 size={24} />
                       </button>
                     )}
+                    {scannedText && (
+                      <button 
+                        onClick={() => {
+                          setDraftFacts(prev => prev + (prev.trim() ? "\n\n" : "") + scannedText);
+                          setView('drafting');
+                          setEnlargedElement('facts');
+                        }} 
+                        className="p-4 bg-emerald-600 rounded-2xl"
+                        title="Send to Drafting Facts"
+                      >
+                        <Plus size={24} />
+                      </button>
+                    )}
                   </div>
                 </div>
                 <div className="flex-1 bg-slate-900/50 border border-white/5 rounded-3xl p-6 overflow-y-auto relative">
@@ -1771,6 +2080,16 @@ export default function AdvocatePortal({ onBack }: { onBack: () => void }) {
                       </button>
                       <button onClick={exportToWord} className="w-full py-4 bg-blue-600/20 border border-blue-600/30 text-blue-500 rounded-2xl font-bold flex items-center justify-center gap-3 hover:bg-blue-600/30 transition-all">
                         <File size={20} /> Export as Word
+                      </button>
+                      <button 
+                        onClick={() => {
+                          setDraftFacts(prev => prev + (prev.trim() ? "\n\n" : "") + scannedText);
+                          setView('drafting');
+                          setEnlargedElement('facts');
+                        }} 
+                        className="w-full py-4 bg-emerald-600/20 border border-emerald-600/30 text-emerald-500 rounded-2xl font-bold flex items-center justify-center gap-3 hover:bg-emerald-600/30 transition-all"
+                      >
+                        <Plus size={20} /> Send to Drafting Facts
                       </button>
                     </div>
                   )}
@@ -2037,7 +2356,7 @@ export default function AdvocatePortal({ onBack }: { onBack: () => void }) {
                 <div className="flex justify-between items-end">
                   <div>
                     <div className="text-[10px] font-black text-indigo-500 tracking-[0.2em] mb-2 uppercase">Nexus Justice: Model Manager</div>
-                    <h2 className="text-xl font-black italic text-slate-200">Gemma 3n <span className="text-slate-500 text-base ml-1">E2B-IT</span></h2>
+                    <h2 className="text-xl font-black italic text-slate-200">Gemma3-1B-it <span className="text-slate-500 text-base ml-1">Ollama Optimized</span></h2>
                   </div>
                   <div className="bg-white/5 border border-white/10 rounded-2xl px-6 py-4 flex items-center gap-4">
                     <div className="text-right">
@@ -2077,7 +2396,7 @@ export default function AdvocatePortal({ onBack }: { onBack: () => void }) {
                           </div>
 
                           <button 
-                            onClick={() => handleDownloadGemma3n()}
+                            onClick={() => handleDownloadGemma3()}
                             disabled={isDownloading || (connectionType === 'mobile' && downloadSlice >= 1 && downloadProgress < 100)}
                             className="w-full py-5 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-30 rounded-2xl font-black text-sm text-white transition-all uppercase tracking-[0.2em] flex items-center justify-center gap-3"
                           >
@@ -2089,40 +2408,67 @@ export default function AdvocatePortal({ onBack }: { onBack: () => void }) {
 
                       <div className="w-[400px] flex flex-col gap-6">
                         <div className="bg-slate-900/50 border border-white/5 rounded-[40px] p-8">
-                          <div className="text-[10px] font-black text-indigo-500 uppercase tracking-widest mb-6">Daily Slices (5.2 GB Total)</div>
-                          <div className="space-y-2">
+                          <div className="text-[10px] font-black text-indigo-500 uppercase tracking-widest mb-6">AI Fleet Status</div>
+                          <div className="space-y-3">
                             {[
-                              { day: 1, size: '900 MB', status: downloadProgress >= 17 ? 'complete' : 'pending' },
-                              { day: 2, size: '900 MB', status: downloadProgress >= 34 ? 'complete' : 'pending' },
-                              { day: 3, size: '900 MB', status: downloadProgress >= 51 ? 'complete' : 'pending' },
-                              { day: 4, size: '900 MB', status: downloadProgress >= 67 ? 'complete' : 'pending' },
-                              { day: 5, size: '900 MB', status: downloadProgress >= 84 ? 'complete' : 'pending' },
-                              { day: 6, size: '825 MB', status: downloadProgress === 100 ? 'complete' : 'pending' },
-                            ].map((slice) => (
-                              <button 
-                                key={slice.day} 
-                                onClick={() => slice.status === 'pending' && !isDownloading && handleDownloadGemma3n(slice.day)}
-                                disabled={slice.status === 'complete' || isDownloading}
-                                className={`w-full flex items-center justify-between p-3 rounded-xl border transition-all ${
-                                  slice.status === 'complete' 
-                                    ? 'bg-emerald-500/5 border-emerald-500/10 text-emerald-500 cursor-default' 
-                                    : 'bg-white/5 border-white/5 text-slate-400 hover:bg-white/10 hover:border-white/20 active:scale-[0.98]'
-                                }`}
-                              >
+                              { name: 'Gemini 3.1 Pro', type: 'Cloud', status: aiStatus.builtIn ? 'Active' : 'Non Active', icon: <Cloud size={14} /> },
+                              { name: 'Sarvam 30B', type: 'Cloud', status: 'Active', icon: <Zap size={14} /> },
+                              { name: aiStatus.voiceModel || 'Gemma3-1B-it', type: 'Local', status: aiStatus.isLocalReady ? 'Active' : 'Non Active', icon: <Cpu size={14} /> },
+                              { name: 'Malayalam TTS', type: 'Local', status: malayalamStatus.ttsReady ? 'Active' : 'Non Active', icon: <Volume2 size={14} /> },
+                              { name: 'Malayalam STT', type: 'Local', status: malayalamStatus.sttReady ? 'Active' : 'Non Active', icon: <Mic size={14} /> },
+                            ].map((ai) => (
+                              <div key={ai.name} className="flex items-center justify-between p-3 rounded-xl border border-white/5 bg-white/5">
                                 <div className="flex items-center gap-3">
-                                  <div className="text-[9px] font-black uppercase tracking-widest">Day {slice.day}</div>
-                                  <div className="text-[9px] font-bold opacity-60">{slice.size}</div>
-                                </div>
-                                {slice.status === 'complete' ? (
-                                  <CheckCircle size={14} />
-                                ) : (
-                                  <div className="flex items-center gap-2">
-                                    <div className="text-[8px] font-black uppercase opacity-0 group-hover:opacity-100 transition-opacity">Manual DL</div>
-                                    <div className="w-3 h-3 rounded-full border border-white/20" />
+                                  <div className="text-indigo-500">{ai.icon}</div>
+                                  <div>
+                                    <div className="text-[10px] font-black text-slate-200 uppercase tracking-widest">{ai.name}</div>
+                                    <div className="text-[8px] text-slate-500 font-bold uppercase">{ai.type}</div>
                                   </div>
-                                )}
-                              </button>
+                                </div>
+                                <div className={`text-[9px] font-black uppercase tracking-widest ${ai.status === 'Active' ? 'text-emerald-500' : 'text-slate-500'}`}>
+                                  {ai.status}
+                                </div>
+                              </div>
                             ))}
+                          </div>
+                        </div>
+
+                        <div className="bg-slate-900/50 border border-white/5 rounded-[40px] p-8">
+                          <div className="text-[10px] font-black text-indigo-500 uppercase tracking-widest mb-6">Malayalam Offline Models</div>
+                          <div className="space-y-4">
+                            <div className="p-4 bg-white/5 border border-white/10 rounded-2xl">
+                              <div className="flex justify-between items-center mb-2">
+                                <div className="text-[11px] font-black text-slate-200 uppercase tracking-widest">Malayalam TTS (Kavya)</div>
+                                <div className="text-[9px] font-bold text-slate-500">{malayalamStatus.ttsReady ? 'READY' : `${malayalamStatus.ttsProgress}%`}</div>
+                              </div>
+                              <div className="h-1.5 w-full bg-white/5 rounded-full overflow-hidden mb-3">
+                                <div className="h-full bg-indigo-500 transition-all" style={{ width: `${malayalamStatus.ttsProgress}%` }} />
+                              </div>
+                              <button 
+                                onClick={handleDownloadMalayalamTTS}
+                                disabled={malayalamStatus.ttsReady || malayalamStatus.isTTSLoading}
+                                className="w-full py-2 bg-indigo-600/20 hover:bg-indigo-600/40 text-indigo-400 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all disabled:opacity-30"
+                              >
+                                {malayalamStatus.isTTSLoading ? 'Loading...' : (malayalamStatus.ttsReady ? 'Installed' : 'Download TTS')}
+                              </button>
+                            </div>
+
+                            <div className="p-4 bg-white/5 border border-white/10 rounded-2xl">
+                              <div className="flex justify-between items-center mb-2">
+                                <div className="text-[11px] font-black text-slate-200 uppercase tracking-widest">Malayalam STT (Whisper)</div>
+                                <div className="text-[9px] font-bold text-slate-500">{malayalamStatus.sttReady ? 'READY' : `${malayalamStatus.sttProgress}%`}</div>
+                              </div>
+                              <div className="h-1.5 w-full bg-white/5 rounded-full overflow-hidden mb-3">
+                                <div className="h-full bg-indigo-500 transition-all" style={{ width: `${malayalamStatus.sttProgress}%` }} />
+                              </div>
+                              <button 
+                                onClick={handleDownloadMalayalamSTT}
+                                disabled={malayalamStatus.sttReady || malayalamStatus.isSTTLoading}
+                                className="w-full py-2 bg-indigo-600/20 hover:bg-indigo-600/40 text-indigo-400 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all disabled:opacity-30"
+                              >
+                                {malayalamStatus.isSTTLoading ? 'Loading...' : (malayalamStatus.sttReady ? 'Installed' : 'Download STT')}
+                              </button>
+                            </div>
                           </div>
                         </div>
 
@@ -2135,12 +2481,12 @@ export default function AdvocatePortal({ onBack }: { onBack: () => void }) {
                                   <Globe size={20} />
                                 </div>
                                 <div>
-                                  <div className="text-xs font-black text-slate-200 uppercase tracking-widest">Mobile Slicing</div>
-                                  <div className="text-[10px] text-slate-500 font-bold">900MB / DAY LIMIT</div>
+                                  <div className="text-xs font-black text-slate-200 uppercase tracking-widest">Mobile Optimized</div>
+                                  <div className="text-[10px] text-slate-500 font-bold">1.1 GB TOTAL</div>
                                 </div>
                               </div>
                               <p className="text-[11px] text-slate-400 leading-relaxed">
-                                Optimized for mobile data. Downloads are split into manageable slices to prevent data overages.
+                                Optimized for mobile data. Single-step compressed download for Gemma3-1B-it.
                               </p>
                             </div>
 
@@ -2155,7 +2501,7 @@ export default function AdvocatePortal({ onBack }: { onBack: () => void }) {
                                 </div>
                               </div>
                               <p className="text-[11px] text-slate-400 leading-relaxed">
-                                Full model download enabled. Bypasses slicing for immediate deployment of Gemma 3n.
+                                Full model download enabled. High-speed deployment of Gemma3-1B-it.
                               </p>
                             </div>
                           </div>
@@ -2168,7 +2514,7 @@ export default function AdvocatePortal({ onBack }: { onBack: () => void }) {
                         <div className="w-24 h-24 bg-emerald-500/20 text-emerald-500 rounded-full flex items-center justify-center mb-8">
                           <CheckCircle size={48} />
                         </div>
-                        <h3 className="text-2xl font-black text-white mb-4 uppercase tracking-tighter italic">Gemma 3n Fully Deployed</h3>
+                        <h3 className="text-2xl font-black text-white mb-4 uppercase tracking-tighter italic">Gemma3-1B-it Fully Deployed</h3>
                         <p className="text-slate-400 max-w-md italic">
                           The model is now running locally on your device. All legal research and drafting operations are processed with maximum privacy and zero latency.
                         </p>
@@ -2183,11 +2529,11 @@ export default function AdvocatePortal({ onBack }: { onBack: () => void }) {
                           <div className="space-y-3">
                             <div className="flex justify-between text-[10px] font-bold">
                               <span className="text-slate-500 uppercase">Architecture</span>
-                              <span className="text-slate-300">Gemma 3n E2B-IT</span>
+                              <span className="text-slate-300">Gemma3-1B-it</span>
                             </div>
                             <div className="flex justify-between text-[10px] font-bold">
                               <span className="text-slate-500 uppercase">Total Size</span>
-                              <span className="text-slate-300">~5.2 GB</span>
+                              <span className="text-slate-300">~1.1 GB</span>
                             </div>
                             <div className="flex justify-between text-[10px] font-bold">
                               <span className="text-slate-500 uppercase">Quantization</span>
@@ -2224,12 +2570,12 @@ export default function AdvocatePortal({ onBack }: { onBack: () => void }) {
                   <div className={`w-2 h-2 rounded-full animate-pulse ${
                     voiceAiStatus === 'listening' ? 'bg-red-500' : 
                     voiceAiStatus === 'thinking' ? 'bg-amber-500' : 
-                    voiceAiStatus === 'speaking' ? 'bg-emerald-500' : 'bg-slate-500'
+                    voiceAiStatus === 'speaking' || voiceAiStatus.includes('Speaking') || voiceAiStatus.includes('Answering') ? 'bg-emerald-500' : 'bg-slate-500'
                   }`} />
                   <div className="text-[10px] font-black uppercase tracking-widest text-slate-400">
                     {voiceAiStatus === 'listening' ? 'Nexus Listening' : 
                      voiceAiStatus === 'thinking' ? 'Nexus Processing' : 
-                     voiceAiStatus === 'speaking' ? 'Nexus Speaking' : 'Nexus Ready'}
+                     voiceAiStatus.includes('Answering') || voiceAiStatus.includes('Speaking') ? voiceAiStatus : 'Nexus Ready'}
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
@@ -2377,6 +2723,125 @@ export default function AdvocatePortal({ onBack }: { onBack: () => void }) {
                 <button onClick={() => setIncomingCall(null)} className="flex-1 py-3 bg-red-600 rounded-xl font-bold text-sm">Decline</button>
               </div>
             )}
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Enlarged Element Modal */}
+      <AnimatePresence>
+        {enlargedElement && (
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 bg-black/90 backdrop-blur-xl z-[400] flex items-center justify-center p-10">
+            <div className="max-w-5xl w-full h-full bg-slate-900 border border-white/10 rounded-[40px] flex flex-col overflow-hidden shadow-2xl">
+              <div className="p-6 border-b border-white/5 flex justify-between items-center bg-white/5">
+                <div className="text-xs font-black text-indigo-500 uppercase tracking-[0.2em]">
+                  {enlargedElement === 'facts' && "ENLARGED: FACT OF THE CASE"}
+                  {enlargedElement === 'model' && "ENLARGED: MODEL DRAFT / TEMPLATE"}
+                  {enlargedElement === 'pad' && "ENLARGED: TEMPORARY WRITING PAD"}
+                </div>
+                <button onClick={() => setEnlargedElement(null)} className="p-2 bg-white/5 hover:bg-red-500/20 text-slate-400 hover:text-red-500 rounded-xl transition-all">
+                  <X size={24} />
+                </button>
+              </div>
+              <div className="flex-1 p-10 overflow-y-auto custom-scrollbar bg-black/20">
+                {enlargedElement === 'facts' && (
+                  <textarea 
+                    value={draftFacts} 
+                    onChange={e => setDraftFacts(e.target.value)}
+                    className="w-full h-full bg-transparent text-lg text-slate-300 font-serif leading-relaxed outline-none resize-none"
+                    placeholder="Enter facts..."
+                    autoFocus
+                  />
+                )}
+                {enlargedElement === 'model' && (
+                  <textarea 
+                    value={draftModel} 
+                    onChange={e => setDraftModel(e.target.value)}
+                    className="w-full h-full bg-transparent text-lg text-slate-300 font-serif leading-relaxed outline-none resize-none"
+                    placeholder="Enter model draft..."
+                    autoFocus
+                  />
+                )}
+                {enlargedElement === 'pad' && (
+                  <div 
+                    className="w-full h-full bg-transparent text-xl text-slate-300 font-serif leading-relaxed outline-none whitespace-pre-wrap"
+                    contentEditable 
+                    suppressContentEditableWarning 
+                    onBlur={(e) => setDraftPages([e.currentTarget.innerText])}
+                    autoFocus
+                  >
+                    {draftPages[0]}
+                  </div>
+                )}
+              </div>
+              <div className="p-6 border-t border-white/5 bg-white/5 flex justify-between items-center gap-4">
+                <div className="flex items-center gap-4">
+                  {enlargedElement === 'facts' && (
+                    <div className="flex items-center gap-6">
+                      <div className="flex flex-col items-center gap-2">
+                        <button 
+                          onClick={voiceAiOn ? stopVoiceAi : startVoiceAi}
+                          className={`w-16 h-16 rounded-2xl flex flex-col items-center justify-center text-white transition-all relative ${
+                            voiceAiOn ? 'bg-red-500 shadow-[0_0_30px_rgba(239,68,68,0.5)]' : 'bg-indigo-500 shadow-[0_0_20px_rgba(99,102,241,0.4)]'
+                          }`}
+                        >
+                          {voiceAiOn ? <X size={28} /> : <Mic size={28} />}
+                          {voiceAiOn && (
+                            <motion.div 
+                              layoutId="mic-glow-modal"
+                              className="absolute inset-0 rounded-2xl bg-red-500/20 animate-ping"
+                            />
+                          )}
+                        </button>
+                        <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Dictate Story</span>
+                      </div>
+
+                      <div className="flex flex-col items-center gap-2">
+                        <button 
+                          onClick={() => {
+                            setEnlargedElement(null);
+                            setView('read');
+                            if (scanPhase !== 'live') startScan();
+                          }}
+                          className="w-16 h-16 rounded-2xl bg-white/5 border border-white/10 flex flex-col items-center justify-center text-slate-400 hover:text-white hover:bg-white/10 transition-all"
+                        >
+                          <Camera size={28} />
+                        </button>
+                        <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Scan Facts</span>
+                      </div>
+
+                      {voiceAiOn ? (
+                        <div className="flex flex-col ml-4">
+                          <div className="text-[10px] font-black text-indigo-400 tracking-widest uppercase">STORYTELLING ACTIVE</div>
+                          <div className="text-sm text-emerald-500 font-bold animate-pulse max-w-md truncate">
+                            {voiceAiTranscript === "Listening..." ? "Narrate your case facts now..." : voiceAiTranscript}
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="ml-4 hidden md:block">
+                          <div className="text-[10px] font-black text-slate-500 tracking-widest uppercase mb-1">Quick Tip</div>
+                          <div className="text-xs text-slate-400 italic">"Use the mic to narrate the story of the case. AI will append it to the facts."</div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+                <div className="flex gap-4">
+                  {enlargedElement === 'pad' && (
+                    <>
+                      <button onClick={() => handleCopy(draftPages[0])} className="px-6 py-3 bg-white/5 hover:bg-white/10 rounded-xl text-xs font-black uppercase tracking-widest transition-all flex items-center gap-2">
+                        <Copy size={16} /> Copy Content
+                      </button>
+                      <button onClick={() => handleDownloadDraft(draftPages[0])} className="px-6 py-3 bg-indigo-600 hover:bg-indigo-500 rounded-xl text-xs font-black uppercase tracking-widest transition-all flex items-center gap-2">
+                        <Download size={16} /> Download Draft
+                      </button>
+                    </>
+                  )}
+                  <button onClick={() => setEnlargedElement(null)} className="px-8 py-3 bg-slate-800 hover:bg-slate-700 rounded-xl text-xs font-black uppercase tracking-widest transition-all">
+                    Close Preview
+                  </button>
+                </div>
+              </div>
+            </div>
           </motion.div>
         )}
       </AnimatePresence>

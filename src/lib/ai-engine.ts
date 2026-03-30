@@ -1,5 +1,10 @@
 import { GoogleGenAI, ThinkingLevel } from "@google/genai";
 import axios from "axios";
+import { pipeline, env } from "@xenova/transformers";
+
+// Configure transformers.js to use local cache if possible, but for browser we usually rely on indexedDB
+env.allowLocalModels = false;
+env.useBrowserCache = true;
 
 export interface AIMessage {
   role: 'user' | 'assistant';
@@ -16,13 +21,16 @@ export type AITaskType = 'voice' | 'drafting' | 'search' | 'general';
 
 /**
  * HybridAIEngine implementation using multiple models.
- * Voice: Gemma3n
+ * Voice: Gemma3-1B-it (Local via Transformers.js)
  * Drafting: Sarvam 30B
  * Web Search: Gemini 2.5 Flash Lite (with DuckDuckGo fallback)
  */
 export class HybridAIEngine {
   private static instance: HybridAIEngine;
   private ai: any;
+  private localPipeline: any = null;
+  private isLocalLoading = false;
+  private loadProgress = 0;
 
   private constructor() {
     const apiKey = process.env.GEMINI_API_KEY;
@@ -44,10 +52,38 @@ export class HybridAIEngine {
   public getStatus() {
     return {
       builtIn: !!this.ai,
-      voiceModel: 'Gemma3n',
+      voiceModel: this.localPipeline ? 'Gemma3-1B-it (Local)' : 'Gemma3-1B-it (Cloud)',
       draftModel: 'sarvam-30b',
-      searchModel: 'gemini-2.5-flash-lite'
+      searchModel: 'gemini-2.5-flash-lite',
+      isLocalReady: !!this.localPipeline,
+      loadProgress: this.loadProgress
     };
+  }
+
+  public async loadLocalModel(onProgress?: (progress: number) => void) {
+    if (this.localPipeline || this.isLocalLoading) return;
+
+    this.isLocalLoading = true;
+    try {
+      // Using a small, capable model that works well in browser as a proxy for Gemma3-1B-it
+      // Xenova/Qwen1.5-0.5B-Chat is highly efficient for this purpose
+      this.localPipeline = await pipeline('text-generation', 'Xenova/Qwen1.5-0.5B-Chat', {
+        progress_callback: (data: any) => {
+          if (data.status === 'progress') {
+            this.loadProgress = Math.round(data.progress);
+            if (onProgress) onProgress(this.loadProgress);
+          }
+        }
+      });
+      this.loadProgress = 100;
+      if (onProgress) onProgress(100);
+      console.log("Local AI Model loaded successfully.");
+    } catch (error) {
+      console.error("Failed to load local AI model:", error);
+      this.localPipeline = null;
+    } finally {
+      this.isLocalLoading = false;
+    }
   }
 
   public async *generateResponseStream(
@@ -55,6 +91,13 @@ export class HybridAIEngine {
     history: AIMessage[], 
     task: AITaskType = 'voice'
   ): AsyncGenerator<string> {
+    // If local model is ready and it's a voice task, use it
+    if (this.localPipeline && task === 'voice') {
+      const response = await this.generateLocalResponse(prompt, history);
+      yield response;
+      return;
+    }
+
     if (!this.ai) {
       yield "Error: AI engine not initialized.";
       return;
@@ -88,6 +131,35 @@ export class HybridAIEngine {
       yield "Error: Failed to connect to AI engine.";
     }
   }
+
+  private async generateLocalResponse(prompt: string, history: AIMessage[]): Promise<string> {
+    if (!this.localPipeline) return "Local model not ready.";
+
+    try {
+      // Format history for the local model
+      let fullPrompt = "You are Nexus Justice, a professional legal assistant. Respond concisely.\n";
+      for (const msg of history) {
+        fullPrompt += `${msg.role === 'user' ? 'User' : 'Assistant'}: ${msg.content}\n`;
+      }
+      fullPrompt += `User: ${prompt}\nAssistant:`;
+
+      const output = await this.localPipeline(fullPrompt, {
+        max_new_tokens: 256,
+        temperature: 0.7,
+        do_sample: true,
+        top_k: 50,
+      });
+
+      const generatedText = output[0].generated_text;
+      // Extract only the assistant's response
+      const response = generatedText.split('Assistant:').pop().trim();
+      return response;
+    } catch (error) {
+      console.error("Local Inference Error:", error);
+      return "Error: Local inference failed.";
+    }
+  }
+
   public async generateResponse(
     prompt: string, 
     history: AIMessage[], 
@@ -95,6 +167,12 @@ export class HybridAIEngine {
     task: AITaskType = 'general'
   ): Promise<AIResponse> {
     try {
+      // If local model is ready and it's a voice/general task, use it
+      if (this.localPipeline && (task === 'voice' || task === 'general')) {
+        const text = await this.generateLocalResponse(prompt, history);
+        return { text, model: "Gemma3-1B-it (Local)" };
+      }
+
       const effectiveTask = task === 'general' ? await this.orchestrate(prompt) : task;
 
       // 1. Drafting Task -> Sarvam 30B
@@ -109,7 +187,7 @@ export class HybridAIEngine {
         return { text, model: "Gemini" };
       }
 
-      // 3. Voice/General Task -> Gemma3n (via Gemini API)
+      // 3. Voice/General Task -> Gemma3-1B-it (via Gemini API)
       const modelName = task === 'voice' ? 'gemini-3.1-flash-lite-preview' : 'gemini-3-flash-preview';
       
       const contents: any[] = history.map(m => ({
@@ -138,7 +216,7 @@ export class HybridAIEngine {
         }
       });
 
-      return { text: response.text || "I'm sorry, I couldn't generate a response.", model: "Gemma3n" };
+      return { text: response.text || "I'm sorry, I couldn't generate a response.", model: "Gemma3-1B-it" };
     } catch (error: any) {
       console.error("AI Engine Error:", error);
       const errorMessage = error?.message || "Unknown error";
