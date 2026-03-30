@@ -1130,12 +1130,18 @@ export default function AdvocatePortal({ onBack }: { onBack: () => void }) {
     const task = isSearch ? 'search' : 'general';
 
     try {
+      console.log("Sending request to AI Engine:", text, task);
       const response = await aiEngine.generateResponse(text, chatHistory, undefined, task);
+      console.log("AI Engine Response:", response);
       const assistantMsg: AIMessage = { role: 'assistant', content: response.text, model: response.model };
       const newHistory = [...chatHistory, userMsg, assistantMsg];
       setChatHistory(newHistory);
       setVoiceHistory(newHistory.slice(-10));
-    } catch (err) { console.error(err); } finally { setConsoleLoading(false); }
+    } catch (err) { 
+      console.error("Consultation Error:", err); 
+    } finally { 
+      setConsoleLoading(false); 
+    }
   };
 
   const handleCopy = (text: string) => {

@@ -33,11 +33,13 @@ export class HybridAIEngine {
   private loadProgress = 0;
 
   private constructor() {
-    const apiKey = process.env.GEMINI_API_KEY;
+    const apiKey = process.env.GEMINI_API_KEY || (import.meta as any).env?.VITE_GEMINI_API_KEY;
+    console.log("Nexus AI Engine Initializing...");
     if (apiKey) {
+      console.log("GEMINI_API_KEY found.");
       this.ai = new GoogleGenAI({ apiKey });
     } else {
-      console.warn("GEMINI_API_KEY is not defined. AI features will be disabled.");
+      console.warn("GEMINI_API_KEY is not defined. AI features will be disabled. Please set GEMINI_API_KEY in environment variables.");
       this.ai = null;
     }
   }
@@ -167,15 +169,21 @@ export class HybridAIEngine {
     task: AITaskType = 'general'
   ): Promise<AIResponse> {
     try {
+      console.log("Generating response for task:", task);
       // If local model is ready and it's a voice/general task, use it
       if (this.localPipeline && (task === 'voice' || task === 'general')) {
+        console.log("Using local model for inference.");
         const text = await this.generateLocalResponse(prompt, history);
         return { text, model: "Gemma3-1B-it (Local)" };
       }
 
       const effectiveTask = task === 'general' ? await this.orchestrate(prompt) : task;
+      console.log("Effective task:", effectiveTask);
 
-      // 1. Drafting Task -> Sarvam 30B
+      if (!this.ai) {
+        console.error("AI Engine not initialized (this.ai is null)");
+        return { text: "Error: AI engine not initialized. Please check your API keys.", model: "Error" };
+      }
       if (effectiveTask === 'drafting') {
         const text = await this.callSarvam(prompt, history);
         return { text, model: "Sarvam" };
@@ -257,7 +265,7 @@ export class HybridAIEngine {
   }
 
   private async callSarvam(prompt: string, history: AIMessage[]): Promise<string> {
-    const apiKey = process.env.SARVAM_API_KEY;
+    const apiKey = process.env.SARVAM_API_KEY || (import.meta as any).env?.VITE_SARVAM_API_KEY;
     if (!apiKey) {
       // Fallback if key missing
       return "Error: Sarvam API Key missing. Please configure it in settings.";
@@ -289,7 +297,7 @@ export class HybridAIEngine {
       contents.push({ role: 'user', parts: [{ text: prompt }] });
 
       const response = await this.ai.models.generateContent({
-        model: 'gemini-2.5-flash-lite-preview',
+        model: 'gemini-3.1-flash-lite-preview',
         contents: contents,
         config: {
           tools: [{ googleSearch: {} }]
@@ -317,7 +325,7 @@ export class HybridAIEngine {
   }
 
   public async generateSarvamTTS(text: string, languageCode: string = 'ml-IN'): Promise<string | null> {
-    const apiKey = process.env.SARVAM_API_KEY;
+    const apiKey = process.env.SARVAM_API_KEY || (import.meta as any).env?.VITE_SARVAM_API_KEY;
     if (!apiKey) return null;
 
     try {
